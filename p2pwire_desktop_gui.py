@@ -12,6 +12,7 @@ import platform
 import concurrent.futures
 import urllib.request
 import tkinter.filedialog as filedialog
+import tkinter as tk
 import os
 
 ctk.set_appearance_mode("Dark")
@@ -21,7 +22,7 @@ class P2PwireApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("P2Pwire - Desktop System Audio Bridge")
-        self.geometry("500x550")
+        self.geometry("500x700")
         self.resizable(False, False)
         
         self.is_streaming = False
@@ -29,9 +30,13 @@ class P2PwireApp(ctk.CTk):
         self.thread = None
         self.is_scanning = False
         self.selected_file_path = ctk.StringVar()
+        self.transfer_progress = ctk.StringVar(value="Progress: 0%")
 
         self.title_label = ctk.CTkLabel(self, text="🚀 P2Pwire System Audio Bridge", font=ctk.CTkFont(size=18, weight="bold"))
         self.title_label.pack(pady=(16, 6))
+
+        self.subtitle_label = ctk.CTkLabel(self, text="Stream 100% pure system audio to your Android phone", font=ctk.CTkFont(size=12), text_color="#94A3B8")
+        self.subtitle_label.pack(pady=(0, 12))
 
         # --- Tabs ---
         self.tabview = ctk.CTkTabview(self)
@@ -91,17 +96,48 @@ class P2PwireApp(ctk.CTk):
             font=ctk.CTkFont(size=14, weight="bold")
         )
         self.btn_toggle.pack(fill="x", padx=20, pady=20)
+        
+        # Waveform Visualization Canvas
+        self.canvas = tk.Canvas(tab, width=400, height=150, bg='#111827', highlightthickness=0)
+        self.canvas.pack(pady=10)
+        self.bars = [self.canvas.create_rectangle(i*10+2, 75, i*10+8, 75, fill="#34D399") for i in range(40)]
+        self.pulse_text = self.canvas.create_text(200, 130, text="● Streaming Active", fill="#34D399", font=("Arial", 10), state="hidden")
 
     def setup_file_tab(self):
         tab = self.tabview.tab("File Transfer")
         ctk.CTkButton(tab, text="📁 Select File from PC", command=self.select_file, height=40).pack(fill="x", padx=20, pady=10)
         ctk.CTkLabel(tab, textvariable=self.selected_file_path, wraplength=400, font=ctk.CTkFont(size=10)).pack(pady=5)
+        
+        self.progress_bar = ctk.CTkProgressBar(tab)
+        self.progress_bar.pack(fill="x", padx=20, pady=10)
+        self.progress_bar.set(0)
+        
+        ctk.CTkLabel(tab, textvariable=self.transfer_progress, font=ctk.CTkFont(size=12)).pack(pady=5)
+        
         ctk.CTkButton(tab, text="🚀 Send File to Android Phone", command=self.send_file, fg_color="#10B981", hover_color="#059669", height=45, font=ctk.CTkFont(size=14, weight="bold")).pack(fill="x", padx=20, pady=10)
 
     def log(self, msg):
         print(msg)
         self.log_box.insert("end", msg + "\n")
         self.log_box.see("end")
+
+    def update_waveform(self, pcm_data):
+        if not self.is_streaming:
+            self.canvas.itemconfig(self.pulse_text, state="hidden")
+            return
+            
+        self.canvas.itemconfig(self.pulse_text, state="normal")
+        
+        # Calculate amplitudes for visualization
+        audio_data = np.frombuffer(pcm_data, dtype=np.int16)
+        # Take 40 chunks
+        chunk_size = len(audio_data) // 40
+        if chunk_size == 0: return
+        for i in range(40):
+            chunk = audio_data[i*chunk_size : (i+1)*chunk_size]
+            amp = np.abs(chunk).mean() / 32768 * 150 # Increased amplitude for better effect
+            # Update bar height
+            self.canvas.coords(self.bars[i], i*10+2, 75-amp, i*10+8, 75+amp)
 
     # --- File Transfer Logic ---
     def select_file(self):
@@ -115,20 +151,30 @@ class P2PwireApp(ctk.CTk):
         if not ip or not file_path:
             self.log("Error: Set IP and Select File")
             return
-        self.log(f"Sending {os.path.basename(file_path)} to {ip}...")
+        
+        self.log(f"Sending {os.path.basename(file_path)}...")
+        self.progress_bar.set(0)
+        self.transfer_progress.set("Progress: 0%")
         threading.Thread(target=self.perform_file_upload, args=(ip, file_path), daemon=True).start()
 
     def perform_file_upload(self, ip, file_path):
         try:
+            file_size = os.path.getsize(file_path)
+            uploaded = 0
             with open(file_path, 'rb') as f:
-                data = f.read()
-                req = urllib.request.Request(f"http://{ip}:8080/api/upload_file", data=data, method='POST')
-                req.add_header('Content-Type', 'application/octet-stream')
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    if response.status == 200:
-                        self.log("File sent successfully!")
-                    else:
-                        self.log(f"Failed: {response.status}")
+                while uploaded < file_size:
+                    chunk = f.read(65536)
+                    if not chunk: break
+                    req = urllib.request.Request(f"http://{ip}:8080/api/upload_file", data=chunk, method='POST')
+                    req.add_header('Content-Type', 'application/octet-stream')
+                    req.add_header('Content-Length', str(len(chunk)))
+                    with urllib.request.urlopen(req, timeout=60) as response:
+                        if response.status != 200: raise Exception(f"Server rejected: {response.status}")
+                    uploaded += len(chunk)
+                    progress = uploaded / file_size
+                    self.progress_bar.set(progress)
+                    self.transfer_progress.set(f"Progress: {int(progress * 100)}%")
+            self.log("File sent successfully!")
         except Exception as e:
             self.log(f"Error: {e}")
 
@@ -150,8 +196,7 @@ class P2PwireApp(ctk.CTk):
         return None
 
     def start_auto_detect_thread(self):
-        if self.is_scanning:
-            return
+        if self.is_scanning: return
         threading.Thread(target=self.detect_android_device, args=(False,), daemon=True).start()
 
     def detect_android_device(self, silent_startup=False):
@@ -160,7 +205,7 @@ class P2PwireApp(ctk.CTk):
             self.after(0, lambda: self.btn_detect.configure(text="⏳ Scanning...", state="disabled"))
             self.after(0, lambda: self.status_label.configure(text="● Scanning local network for Android Phone...", text_color="#38BDF8"))
             self.log("Searching for Android P2Pwire receiver...")
-
+        
         # 1. Hotspot Default Gateway / Common Tether IPs (Hotspot mode: Instant 5ms)
         candidates = []
         try:
@@ -204,7 +249,7 @@ class P2PwireApp(ctk.CTk):
                             break
             except Exception:
                 pass
-
+        
         self.is_scanning = False
         if found_ip:
             self.after(0, lambda: self.ip_entry.delete(0, "end"))
@@ -215,7 +260,6 @@ class P2PwireApp(ctk.CTk):
             if not silent_startup:
                 self.after(0, lambda: self.status_label.configure(text="● Phone not found on network. Enter IP manually.", text_color="#F87171"))
                 self.log("Auto-detection finished: No active P2Pwire phone found on local subnet.")
-
         self.after(0, lambda: self.btn_detect.configure(text="🔍 Auto-Detect", state="normal"))
         return found_ip
 
@@ -226,8 +270,7 @@ class P2PwireApp(ctk.CTk):
             if not ip:
                 self.status_label.configure(text="● Auto-Detecting Android IP...", text_color="#22D3EE")
                 ip = self.detect_android_device(silent_startup=False)
-                if not ip:
-                    return
+                if not ip: return
 
             self.is_streaming = True
             self.btn_toggle.configure(text="⏹️ Stop Streaming", fg_color="#EF4444", hover_color="#DC2626")
@@ -241,12 +284,12 @@ class P2PwireApp(ctk.CTk):
             self.btn_toggle.configure(text="🔊 Start Streaming System Audio", fg_color="#06B6D4", hover_color="#0891B2")
             self.status_label.configure(text="● Status: Disconnected", text_color="#FBBF24")
             self.log("Streaming stopped by user.")
+            self.canvas.itemconfig(self.pulse_text, state="hidden")
 
     def run_async_stream(self, ip):
         async def stream():
             uri = f"ws://{ip}:8080/ws/upload_audio"
             reconnect_attempts = 0
-            max_reconnects = 10
 
             while self.is_streaming:
                 try:
@@ -264,7 +307,6 @@ class P2PwireApp(ctk.CTk):
                         self.log("WebSocket connection established successfully!")
 
                         speaker = sc.default_speaker()
-                        self.log(f"Default speaker detected: {speaker.name}")
                         mic = sc.get_microphone(id=speaker.name, include_loopback=True)
                         self.log("Loopback audio capture device initialized successfully.")
 
@@ -308,6 +350,8 @@ class P2PwireApp(ctk.CTk):
                             seq = (seq + 1) & 0xFFFF
                             try:
                                 await ws.send(bytes(h) + pcm16)
+                                # Update waveform
+                                self.after(0, self.update_waveform, pcm16)
                             except websockets.exceptions.ConnectionClosedOK:
                                 stopped_by_phone = True
                                 self.log("Audio playback stopped by Android phone.")
