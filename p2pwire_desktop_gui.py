@@ -11,6 +11,8 @@ import subprocess
 import platform
 import concurrent.futures
 import urllib.request
+import tkinter.filedialog as filedialog
+import os
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -19,19 +21,26 @@ class P2PwireApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("P2Pwire - Desktop System Audio Bridge")
-        self.geometry("500x410")
+        self.geometry("500x550")
         self.resizable(False, False)
         
         self.is_streaming = False
         self.loop = None
         self.thread = None
         self.is_scanning = False
+        self.selected_file_path = ctk.StringVar()
 
         self.title_label = ctk.CTkLabel(self, text="🚀 P2Pwire System Audio Bridge", font=ctk.CTkFont(size=18, weight="bold"))
         self.title_label.pack(pady=(16, 6))
 
-        self.subtitle_label = ctk.CTkLabel(self, text="Stream 100% pure system audio to your Android phone", font=ctk.CTkFont(size=12), text_color="#94A3B8")
-        self.subtitle_label.pack(pady=(0, 12))
+        # --- Tabs ---
+        self.tabview = ctk.CTkTabview(self)
+        self.tabview.pack(fill="both", expand=True, padx=25, pady=10)
+        self.tabview.add("Audio Stream")
+        self.tabview.add("File Transfer")
+
+        self.setup_audio_tab()
+        self.setup_file_tab()
 
         self.ip_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.ip_frame.pack(fill="x", padx=25, pady=4)
@@ -62,8 +71,18 @@ class P2PwireApp(ctk.CTk):
         self.status_label = ctk.CTkLabel(self, text="● Status: Ready to Connect", font=ctk.CTkFont(size=12, weight="bold"), text_color="#FBBF24")
         self.status_label.pack(pady=10)
 
+        # Compact log console for connection details
+        self.log_box = ctk.CTkTextbox(self, height=80, font=ctk.CTkFont(size=10), text_color="#38BDF8")
+        self.log_box.pack(fill="x", padx=25, pady=(0, 10))
+        self.log_box.insert("0.0", "Ready. Connection status and logs appear here...\n")
+
+        # Launch background auto-detect on startup
+        threading.Thread(target=self.detect_android_device, args=(True,), daemon=True).start()
+
+    def setup_audio_tab(self):
+        tab = self.tabview.tab("Audio Stream")
         self.btn_toggle = ctk.CTkButton(
-            self, 
+            tab, 
             text="🔊 Start Streaming System Audio", 
             command=self.toggle_stream, 
             height=45, 
@@ -71,21 +90,49 @@ class P2PwireApp(ctk.CTk):
             hover_color="#0891B2", 
             font=ctk.CTkFont(size=14, weight="bold")
         )
-        self.btn_toggle.pack(fill="x", padx=25, pady=6)
+        self.btn_toggle.pack(fill="x", padx=20, pady=20)
 
-        # Compact log console for connection details
-        self.log_box = ctk.CTkTextbox(self, height=36, font=ctk.CTkFont(size=10), text_color="#38BDF8")
-        self.log_box.pack(fill="x", padx=25, pady=(0, 10))
-        self.log_box.insert("0.0", "Ready. Connection status and logs appear here...\n")
-
-        # Launch background auto-detect on startup
-        threading.Thread(target=self.detect_android_device, args=(True,), daemon=True).start()
+    def setup_file_tab(self):
+        tab = self.tabview.tab("File Transfer")
+        ctk.CTkButton(tab, text="📁 Select File from PC", command=self.select_file, height=40).pack(fill="x", padx=20, pady=10)
+        ctk.CTkLabel(tab, textvariable=self.selected_file_path, wraplength=400, font=ctk.CTkFont(size=10)).pack(pady=5)
+        ctk.CTkButton(tab, text="🚀 Send File to Android Phone", command=self.send_file, fg_color="#10B981", hover_color="#059669", height=45, font=ctk.CTkFont(size=14, weight="bold")).pack(fill="x", padx=20, pady=10)
 
     def log(self, msg):
         print(msg)
         self.log_box.insert("end", msg + "\n")
         self.log_box.see("end")
 
+    # --- File Transfer Logic ---
+    def select_file(self):
+        file = filedialog.askopenfilename()
+        if file:
+            self.selected_file_path.set(file)
+
+    def send_file(self):
+        ip = self.ip_entry.get().strip()
+        file_path = self.selected_file_path.get()
+        if not ip or not file_path:
+            self.log("Error: Set IP and Select File")
+            return
+        self.log(f"Sending {os.path.basename(file_path)} to {ip}...")
+        threading.Thread(target=self.perform_file_upload, args=(ip, file_path), daemon=True).start()
+
+    def perform_file_upload(self, ip, file_path):
+        try:
+            with open(file_path, 'rb') as f:
+                data = f.read()
+                req = urllib.request.Request(f"http://{ip}:8080/api/upload_file", data=data, method='POST')
+                req.add_header('Content-Type', 'application/octet-stream')
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    if response.status == 200:
+                        self.log("File sent successfully!")
+                    else:
+                        self.log(f"Failed: {response.status}")
+        except Exception as e:
+            self.log(f"Error: {e}")
+
+    # --- Robust Audio/Network Logic (PRESERVED) ---
     def probe_ip(self, ip):
         """Quickly checks if an IP is running the P2Pwire server on port 8080"""
         try:
@@ -163,7 +210,7 @@ class P2PwireApp(ctk.CTk):
             self.after(0, lambda: self.ip_entry.delete(0, "end"))
             self.after(0, lambda: self.ip_entry.insert(0, found_ip))
             self.after(0, lambda: self.status_label.configure(text=f"● Android Phone Found: {found_ip}", text_color="#34D399"))
-            self.log(f"Auto-Detected Android Device IP: {found_ip}")
+            self.log(f"Auto-Detected: {found_ip}")
         else:
             if not silent_startup:
                 self.after(0, lambda: self.status_label.configure(text="● Phone not found on network. Enter IP manually.", text_color="#F87171"))
@@ -281,7 +328,7 @@ class P2PwireApp(ctk.CTk):
                 if not self.is_streaming:
                     break
 
-                # Persistent continuous auto-reconnection (keeps retrying if phone screen locks or Wi-Fi blips)
+                # Persistent continuous auto-reconnection
                 reconnect_attempts += 1
                 if self.is_streaming:
                     backoff = 2 if reconnect_attempts < 5 else 3
