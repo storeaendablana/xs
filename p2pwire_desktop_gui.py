@@ -14,48 +14,68 @@ import urllib.request
 import tkinter.filedialog as filedialog
 import tkinter as tk
 import os
+import struct
+import time
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
+# HBSP (High-Speed Binary Socket Protocol) Constants
+HBSP_MAGIC = b'HBSP'
+HBSP_VERSION = 1
+OP_HANDSHAKE_INIT = 1
+OP_HANDSHAKE_ACK = 2
+OP_CHUNK_DATA = 3
+OP_CHUNK_ACK = 4
+OP_FILE_COMPLETE = 5
+OP_COMPLETE_ACK = 6
+OP_CANCEL = 7
+HBSP_CHUNK_SIZE = 256 * 1024  # 256 KB chunk for gigabit throughput
+
 class P2PwireApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("P2Pwire - Desktop System Audio Bridge")
-        self.geometry("500x700")
+        self.title("P2Pwire - Desktop System Audio & HBSP File Bridge")
+        self.geometry("520x720")
         self.resizable(False, False)
         
         self.is_streaming = False
         self.loop = None
         self.thread = None
         self.is_scanning = False
+        self.hbsp_cancel_flag = False
         self.selected_file_path = ctk.StringVar()
-        self.transfer_progress = ctk.StringVar(value="Progress: 0%")
+        self.transfer_progress = ctk.StringVar(value="Status: Ready for HBSP Transfer")
 
-        self.title_label = ctk.CTkLabel(self, text="🚀 P2Pwire System Audio Bridge", font=ctk.CTkFont(size=18, weight="bold"))
-        self.title_label.pack(pady=(16, 6))
+        self.title_label = ctk.CTkLabel(self, text="🚀 P2Pwire Desktop Bridge", font=ctk.CTkFont(size=18, weight="bold"))
+        self.title_label.pack(pady=(14, 4))
 
-        self.subtitle_label = ctk.CTkLabel(self, text="Stream 100% pure system audio to your Android phone", font=ctk.CTkFont(size=12), text_color="#94A3B8")
-        self.subtitle_label.pack(pady=(0, 12))
+        self.subtitle_label = ctk.CTkLabel(
+            self,
+            text="Real-time Audio Stream & Gigabit HBSP Binary File Transfer",
+            font=ctk.CTkFont(size=12),
+            text_color="#94A3B8"
+        )
+        self.subtitle_label.pack(pady=(0, 10))
 
         # --- Tabs ---
         self.tabview = ctk.CTkTabview(self)
-        self.tabview.pack(fill="both", expand=True, padx=25, pady=10)
+        self.tabview.pack(fill="both", expand=True, padx=20, pady=(0, 6))
         self.tabview.add("Audio Stream")
-        self.tabview.add("File Transfer")
+        self.tabview.add("High-Speed Files (HBSP)")
 
         self.setup_audio_tab()
         self.setup_file_tab()
 
         self.ip_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.ip_frame.pack(fill="x", padx=25, pady=4)
+        self.ip_frame.pack(fill="x", padx=20, pady=4)
 
-        self.ip_label = ctk.CTkLabel(self.ip_frame, text="Android Phone IP Address:", font=ctk.CTkFont(size=13, weight="bold"))
+        self.ip_label = ctk.CTkLabel(self.ip_frame, text="Android Phone IP Address:", font=ctk.CTkFont(size=12, weight="bold"))
         self.ip_label.pack(anchor="w", padx=2)
 
         # Row with Entry + Auto-Detect Button
         self.ip_input_row = ctk.CTkFrame(self.ip_frame, fg_color="transparent")
-        self.ip_input_row.pack(fill="x", pady=(5, 0))
+        self.ip_input_row.pack(fill="x", pady=(4, 0))
 
         self.ip_entry = ctk.CTkEntry(self.ip_input_row, placeholder_text="e.g. 192.168.43.1 or 10.x.x.x", height=38, font=ctk.CTkFont(size=13))
         self.ip_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
@@ -74,15 +94,16 @@ class P2PwireApp(ctk.CTk):
         self.btn_detect.pack(side="right")
 
         self.status_label = ctk.CTkLabel(self, text="● Status: Ready to Connect", font=ctk.CTkFont(size=12, weight="bold"), text_color="#FBBF24")
-        self.status_label.pack(pady=10)
+        self.status_label.pack(pady=6)
 
-        # Compact log console for connection details
-        self.log_box = ctk.CTkTextbox(self, height=80, font=ctk.CTkFont(size=10), text_color="#38BDF8")
-        self.log_box.pack(fill="x", padx=25, pady=(0, 10))
-        self.log_box.insert("0.0", "Ready. Connection status and logs appear here...\n")
+        # Compact log console
+        self.log_box = ctk.CTkTextbox(self, height=75, font=ctk.CTkFont(size=10), text_color="#38BDF8")
+        self.log_box.pack(fill="x", padx=20, pady=(0, 10))
+        self.log_box.insert("0.0", "Ready. HBSP Protocol Active on Port 8082 • Audio on Port 8080\n")
 
-        # Launch background auto-detect on startup
+        # Background auto-detect & PC receiver
         threading.Thread(target=self.detect_android_device, args=(True,), daemon=True).start()
+        threading.Thread(target=self.run_pc_hbsp_receiver, daemon=True).start()
 
     def setup_audio_tab(self):
         tab = self.tabview.tab("Audio Stream")
@@ -90,31 +111,87 @@ class P2PwireApp(ctk.CTk):
             tab, 
             text="🔊 Start Streaming System Audio", 
             command=self.toggle_stream, 
-            height=45, 
+            height=42, 
             fg_color="#06B6D4", 
             hover_color="#0891B2", 
             font=ctk.CTkFont(size=14, weight="bold")
         )
-        self.btn_toggle.pack(fill="x", padx=20, pady=20)
+        self.btn_toggle.pack(fill="x", padx=16, pady=(12, 8))
         
         # Waveform Visualization Canvas
-        self.canvas = tk.Canvas(tab, width=400, height=150, bg='#111827', highlightthickness=0)
-        self.canvas.pack(pady=10)
-        self.bars = [self.canvas.create_rectangle(i*10+2, 75, i*10+8, 75, fill="#34D399") for i in range(40)]
-        self.pulse_text = self.canvas.create_text(200, 130, text="● Streaming Active", fill="#34D399", font=("Arial", 10), state="hidden")
+        self.canvas = tk.Canvas(tab, width=420, height=130, bg='#111827', highlightthickness=0)
+        self.canvas.pack(pady=8)
+        self.bars = [self.canvas.create_rectangle(i*10+4, 65, i*10+10, 65, fill="#34D399") for i in range(40)]
+        self.pulse_text = self.canvas.create_text(210, 115, text="● Streaming 48kHz System Audio Active", fill="#34D399", font=("Arial", 10), state="hidden")
 
     def setup_file_tab(self):
-        tab = self.tabview.tab("File Transfer")
-        ctk.CTkButton(tab, text="📁 Select File from PC", command=self.select_file, height=40).pack(fill="x", padx=20, pady=10)
-        ctk.CTkLabel(tab, textvariable=self.selected_file_path, wraplength=400, font=ctk.CTkFont(size=10)).pack(pady=5)
+        tab = self.tabview.tab("High-Speed Files (HBSP)")
+
+        protocol_frame = ctk.CTkFrame(tab, fg_color="#1E293B", corner_radius=10)
+        protocol_frame.pack(fill="x", padx=16, pady=(10, 8))
+
+        ctk.CTkLabel(
+            protocol_frame,
+            text="⚡ HBSP Binary Stream Protocol • Zero HTTP Overhead • 100+ MB/s",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#10B981"
+        ).pack(pady=6)
+
+        ctk.CTkButton(
+            tab,
+            text="📁 Select File from PC (Movies, Documents, Music)",
+            command=self.select_file,
+            height=38,
+            fg_color="#334155",
+            hover_color="#475569"
+        ).pack(fill="x", padx=16, pady=4)
+
+        self.file_info_label = ctk.CTkLabel(
+            tab,
+            textvariable=self.selected_file_path,
+            wraplength=440,
+            font=ctk.CTkFont(size=11),
+            text_color="#CBD5E1"
+        )
+        self.file_info_label.pack(pady=4)
         
-        self.progress_bar = ctk.CTkProgressBar(tab)
-        self.progress_bar.pack(fill="x", padx=20, pady=10)
+        self.progress_bar = ctk.CTkProgressBar(tab, progress_color="#10B981", fg_color="#1E293B", height=14)
+        self.progress_bar.pack(fill="x", padx=16, pady=(8, 4))
         self.progress_bar.set(0)
         
-        ctk.CTkLabel(tab, textvariable=self.transfer_progress, font=ctk.CTkFont(size=12)).pack(pady=5)
+        self.lbl_progress = ctk.CTkLabel(
+            tab,
+            textvariable=self.transfer_progress,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#38BDF8"
+        )
+        self.lbl_progress.pack(pady=2)
         
-        ctk.CTkButton(tab, text="🚀 Send File to Android Phone", command=self.send_file, fg_color="#10B981", hover_color="#059669", height=45, font=ctk.CTkFont(size=14, weight="bold")).pack(fill="x", padx=20, pady=10)
+        btn_row = ctk.CTkFrame(tab, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(8, 10))
+
+        self.btn_send_file = ctk.CTkButton(
+            btn_row,
+            text="🚀 Send via HBSP Binary Stream",
+            command=self.send_file_hbsp,
+            fg_color="#10B981",
+            hover_color="#059669",
+            height=42,
+            font=ctk.CTkFont(size=13, weight="bold")
+        )
+        self.btn_send_file.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        self.btn_cancel_file = ctk.CTkButton(
+            btn_row,
+            text="✕ Cancel",
+            command=self.cancel_hbsp_transfer,
+            fg_color="#EF4444",
+            hover_color="#DC2626",
+            height=42,
+            width=90,
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.btn_cancel_file.pack(side="right")
 
     def log(self, msg):
         print(msg)
@@ -127,60 +204,232 @@ class P2PwireApp(ctk.CTk):
             return
             
         self.canvas.itemconfig(self.pulse_text, state="normal")
-        
-        # Calculate amplitudes for visualization
         audio_data = np.frombuffer(pcm_data, dtype=np.int16)
-        # Take 40 chunks
         chunk_size = len(audio_data) // 40
         if chunk_size == 0: return
         for i in range(40):
             chunk = audio_data[i*chunk_size : (i+1)*chunk_size]
-            amp = np.abs(chunk).mean() / 32768 * 150 # Increased amplitude for better effect
-            # Update bar height
-            self.canvas.coords(self.bars[i], i*10+2, 75-amp, i*10+8, 75+amp)
+            amp = np.abs(chunk).mean() / 32768 * 140
+            self.canvas.coords(self.bars[i], i*10+4, 65-amp, i*10+10, 65+amp)
 
-    # --- File Transfer Logic ---
     def select_file(self):
         file = filedialog.askopenfilename()
         if file:
-            self.selected_file_path.set(file)
+            size_mb = os.path.getsize(file) / (1024 * 1024)
+            name = os.path.basename(file)
+            self.selected_file_path.set(f"{name} ({size_mb:.1f} MB)")
+            self._current_file_path = file
 
-    def send_file(self):
+    def cancel_hbsp_transfer(self):
+        self.hbsp_cancel_flag = True
+        self.log("Cancelling HBSP transfer...")
+
+    def update_transfer_ui(self, progress, status_text):
+        self.progress_bar.set(progress)
+        self.transfer_progress.set(status_text)
+
+    def recv_exact(self, sock, num_bytes):
+        data = bytearray()
+        while len(data) < num_bytes:
+            packet = sock.recv(num_bytes - len(data))
+            if not packet:
+                raise EOFError(f"Connection closed while reading {num_bytes} bytes")
+            data.extend(packet)
+        return bytes(data)
+
+    def send_file_hbsp(self):
         ip = self.ip_entry.get().strip()
-        file_path = self.selected_file_path.get()
-        if not ip or not file_path:
-            self.log("Error: Set IP and Select File")
+        file_path = getattr(self, '_current_file_path', None)
+        if not ip or not file_path or not os.path.exists(file_path):
+            self.log("Error: Set valid Phone IP and Select a File first")
             return
         
-        self.log(f"Sending {os.path.basename(file_path)}...")
-        self.progress_bar.set(0)
-        self.transfer_progress.set("Progress: 0%")
-        threading.Thread(target=self.perform_file_upload, args=(ip, file_path), daemon=True).start()
+        self.btn_send_file.configure(state="disabled")
+        threading.Thread(target=self.perform_hbsp_file_upload, args=(ip, file_path), daemon=True).start()
 
-    def perform_file_upload(self, ip, file_path):
+    def perform_hbsp_file_upload(self, ip, file_path):
+        self.hbsp_cancel_flag = False
+        sock = None
         try:
             file_size = os.path.getsize(file_path)
+            file_name = os.path.basename(file_path)
+            name_bytes = file_name.encode('utf-8')
+            
+            self.log(f"Connecting to HBSP server at {ip}:8082...")
+            self.after(0, lambda: self.update_transfer_ui(0.01, f"Connecting to {ip}:8082..."))
+            
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 1024)
+            sock.settimeout(12.0)
+            sock.connect((ip, 8082))
+            
+            # 1. Send Handshake Init
+            header = bytearray()
+            header.extend(HBSP_MAGIC)
+            header.append(HBSP_VERSION)
+            header.append(OP_HANDSHAKE_INIT)
+            header.extend(struct.pack('>H', len(name_bytes)))
+            header.extend(name_bytes)
+            header.extend(struct.pack('>Q', file_size))
+            header.extend(struct.pack('>I', HBSP_CHUNK_SIZE))
+            
+            sock.sendall(header)
+            
+            # 2. Receive Handshake ACK
+            ack_data = self.recv_exact(sock, 15)
+            if not ack_data.startswith(HBSP_MAGIC) or ack_data[5] != OP_HANDSHAKE_ACK or ack_data[6] != 0:
+                raise Exception(f"HBSP Handshake rejected: {ack_data}")
+            
+            self.log(f"HBSP Handshake accepted! Streaming {file_name} ({file_size / (1024*1024):.1f} MB)...")
+            
+            # 3. Stream Chunks over raw socket
+            chunk_idx = 0
             uploaded = 0
+            start_time = time.time()
+            last_calc_time = start_time
+            bytes_since_calc = 0
+            current_speed = 0.0
+            
             with open(file_path, 'rb') as f:
-                while uploaded < file_size:
-                    chunk = f.read(65536)
-                    if not chunk: break
-                    req = urllib.request.Request(f"http://{ip}:8080/api/upload_file", data=chunk, method='POST')
-                    req.add_header('Content-Type', 'application/octet-stream')
-                    req.add_header('Content-Length', str(len(chunk)))
-                    with urllib.request.urlopen(req, timeout=60) as response:
-                        if response.status != 200: raise Exception(f"Server rejected: {response.status}")
-                    uploaded += len(chunk)
-                    progress = uploaded / file_size
-                    self.progress_bar.set(progress)
-                    self.transfer_progress.set(f"Progress: {int(progress * 100)}%")
-            self.log("File sent successfully!")
-        except Exception as e:
-            self.log(f"Error: {e}")
+                while uploaded < file_size and not self.hbsp_cancel_flag:
+                    chunk = f.read(HBSP_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    chunk_len = len(chunk)
+                    
+                    frame = bytearray()
+                    frame.append(OP_CHUNK_DATA)
+                    frame.extend(struct.pack('>I', chunk_idx))
+                    frame.extend(struct.pack('>I', chunk_len))
+                    frame.extend(chunk)
+                    
+                    sock.sendall(frame)
+                    chunk_idx += 1
+                    uploaded += chunk_len
+                    bytes_since_calc += chunk_len
+                    
+                    now = time.time()
+                    diff = now - last_calc_time
+                    if diff >= 0.35:
+                        current_speed = (bytes_since_calc / (1024 * 1024)) / diff
+                        pct = uploaded / file_size if file_size > 0 else 0
+                        rem_bytes = max(0, file_size - uploaded)
+                        eta = int((rem_bytes / (1024 * 1024)) / current_speed) if current_speed > 0.1 else 0
+                        
+                        up_mb = uploaded / (1024 * 1024)
+                        tot_mb = file_size / (1024 * 1024)
+                        status_text = f"⚡ {pct*100:.1f}% ({up_mb:.1f} / {tot_mb:.1f} MB) • {current_speed:.1f} MB/s • ETA: {eta}s"
+                        
+                        self.after(0, lambda p=pct, s=status_text: self.update_transfer_ui(p, s))
+                        last_calc_time = now
+                        bytes_since_calc = 0
 
-    # --- Robust Audio/Network Logic (PRESERVED) ---
+            if self.hbsp_cancel_flag:
+                sock.sendall(bytes([OP_CANCEL]))
+                self.log("Transfer cancelled by user.")
+                self.after(0, lambda: self.update_transfer_ui(0.0, "Cancelled by user"))
+                return
+
+            # 4. Complete
+            comp_hdr = bytearray()
+            comp_hdr.append(OP_FILE_COMPLETE)
+            comp_hdr.extend(struct.pack('>Q', uploaded))
+            sock.sendall(comp_hdr)
+            
+            # 5. Receive Complete ACK
+            comp_ack = self.recv_exact(sock, 7)
+            if comp_ack[5] == OP_COMPLETE_ACK and comp_ack[6] == 0:
+                total_time = max(0.1, time.time() - start_time)
+                avg_speed = (file_size / (1024 * 1024)) / total_time
+                self.log(f"✓ File successfully transferred via HBSP in {total_time:.1f}s (Avg: {avg_speed:.1f} MB/s)!")
+                self.after(0, lambda: self.update_transfer_ui(1.0, f"✓ Complete! {file_size / (1024*1024):.1f} MB transferred at {avg_speed:.1f} MB/s"))
+            else:
+                raise Exception("HBSP completion failed")
+
+        except Exception as e:
+            self.log(f"HBSP Transfer Error: {e}")
+            self.after(0, lambda: self.update_transfer_ui(0.0, f"Error: {e}"))
+        finally:
+            if sock:
+                try: sock.close()
+                except: pass
+            self.after(0, lambda: self.btn_send_file.configure(state="normal"))
+
+    # PC Background HBSP Receiver (allows phone to send files to PC)
+    def run_pc_hbsp_receiver(self):
+        try:
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind(("0.0.0.0", 8082))
+            srv.listen(5)
+            while True:
+                conn, addr = srv.accept()
+                threading.Thread(target=self.handle_incoming_hbsp_on_pc, args=(conn, addr), daemon=True).start()
+        except Exception:
+            pass
+
+    def handle_incoming_hbsp_on_pc(self, sock, addr):
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            magic = self.recv_exact(sock, 4)
+            if magic != HBSP_MAGIC:
+                sock.close()
+                return
+            ver = sock.recv(1)[0]
+            op = sock.recv(1)[0]
+            if op != OP_HANDSHAKE_INIT:
+                sock.close()
+                return
+            
+            name_len = struct.unpack('>H', self.recv_exact(sock, 2))[0]
+            file_name = self.recv_exact(sock, name_len).decode('utf-8')
+            file_size = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
+            chunk_size = struct.unpack('>I', self.recv_exact(sock, 4))[0]
+            
+            downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads", "P2PwireTransfers")
+            os.makedirs(downloads_dir, exist_ok=True)
+            out_path = os.path.join(downloads_dir, file_name)
+            
+            ack = bytearray()
+            ack.extend(HBSP_MAGIC)
+            ack.append(HBSP_VERSION)
+            ack.append(OP_HANDSHAKE_ACK)
+            ack.append(0)
+            ack.extend(struct.pack('>Q', 0))
+            sock.sendall(ack)
+            
+            self.log(f"Receiving {file_name} ({file_size/(1024*1024):.1f} MB) from phone ({addr[0]})...")
+            
+            transferred = 0
+            with open(out_path, 'wb') as f:
+                while transferred < file_size:
+                    fop = sock.recv(1)
+                    if not fop: break
+                    if fop[0] == OP_CHUNK_DATA:
+                        c_idx = struct.unpack('>I', self.recv_exact(sock, 4))[0]
+                        c_len = struct.unpack('>I', self.recv_exact(sock, 4))[0]
+                        c_data = self.recv_exact(sock, c_len)
+                        f.write(c_data)
+                        transferred += c_len
+                    elif fop[0] == OP_FILE_COMPLETE:
+                        self.recv_exact(sock, 8)
+                        break
+            
+            cack = bytearray()
+            cack.extend(HBSP_MAGIC)
+            cack.append(HBSP_VERSION)
+            cack.append(OP_COMPLETE_ACK)
+            cack.append(0)
+            sock.sendall(cack)
+            self.log(f"✓ Received file from phone saved to: {out_path}")
+        except Exception as e:
+            self.log(f"Error receiving file on PC: {e}")
+        finally:
+            try: sock.close()
+            except: pass
+
     def probe_ip(self, ip):
-        """Quickly checks if an IP is running the P2Pwire server on port 8080"""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(0.18)
@@ -206,7 +455,6 @@ class P2PwireApp(ctk.CTk):
             self.after(0, lambda: self.status_label.configure(text="● Scanning local network for Android Phone...", text_color="#38BDF8"))
             self.log("Searching for Android P2Pwire receiver...")
         
-        # 1. Hotspot Default Gateway / Common Tether IPs (Hotspot mode: Instant 5ms)
         candidates = []
         try:
             if platform.system() == "Windows":
@@ -220,7 +468,6 @@ class P2PwireApp(ctk.CTk):
         except Exception:
             pass
 
-        # Standard Android Hotspot & USB tethering gateway addresses
         for gw in ["192.168.43.1", "192.168.44.1", "192.168.50.1", "192.168.42.129"]:
             if gw not in candidates:
                 candidates.append(gw)
@@ -231,7 +478,6 @@ class P2PwireApp(ctk.CTk):
                 found_ip = cand
                 break
 
-        # 2. Local Wi-Fi subnet scan (if phone & laptop are on the same router)
         if not found_ip:
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -266,7 +512,6 @@ class P2PwireApp(ctk.CTk):
     def toggle_stream(self):
         if not self.is_streaming:
             ip = self.ip_entry.get().strip()
-            # If IP is empty, auto-detect first
             if not ip:
                 self.status_label.configure(text="● Auto-Detecting Android IP...", text_color="#22D3EE")
                 ip = self.detect_android_device(silent_startup=False)
@@ -294,7 +539,6 @@ class P2PwireApp(ctk.CTk):
             while self.is_streaming:
                 try:
                     self.log(f"Opening WebSocket connection to {uri}...")
-                    # 20s Ping-Pong Heartbeat prevents Wi-Fi AP, hotspot NAT, and router idle drops
                     async with websockets.connect(
                         uri,
                         ping_interval=20,
@@ -312,11 +556,9 @@ class P2PwireApp(ctk.CTk):
 
                         self.after(0, lambda: self.status_label.configure(text="● Streaming Live 48kHz System Audio...", text_color="#34D399"))
 
-                        # Decoupled Queue: Network delay won't stutter system audio
                         audio_queue = asyncio.Queue(maxsize=15)
                         stop_capture_event = threading.Event()
 
-                        # Dedicated OS Thread for 48kHz audio capture (960 frames = 20ms chunks)
                         def audio_producer():
                             try:
                                 with mic.recorder(samplerate=48000, channels=2) as recorder:
@@ -326,7 +568,6 @@ class P2PwireApp(ctk.CTk):
                                         d = np.clip(mono, -1.0, 1.0)
                                         pcm16 = (d * 32767).astype(np.int16).tobytes()
 
-                                        # If network buffer is full, drop oldest chunk to ensure absolute zero-lag
                                         if audio_queue.full():
                                             try:
                                                 audio_queue.get_nowait()
@@ -350,7 +591,6 @@ class P2PwireApp(ctk.CTk):
                             seq = (seq + 1) & 0xFFFF
                             try:
                                 await ws.send(bytes(h) + pcm16)
-                                # Update waveform
                                 self.after(0, self.update_waveform, pcm16)
                             except websockets.exceptions.ConnectionClosedOK:
                                 stopped_by_phone = True
@@ -372,7 +612,6 @@ class P2PwireApp(ctk.CTk):
                 if not self.is_streaming:
                     break
 
-                # Persistent continuous auto-reconnection
                 reconnect_attempts += 1
                 if self.is_streaming:
                     backoff = 2 if reconnect_attempts < 5 else 3
