@@ -1,5 +1,7 @@
 # P2Pwire Premium Desktop GUI Client (CustomTkinter)
-# Installation: pip install customtkinter soundcard numpy websockets
+# Optimized for 100+ MB/s Gigabit Speed on 5GHz Wi-Fi and USB 3.0 Tethering
+# Requirements: pip install customtkinter soundcard numpy websockets
+
 import customtkinter as ctk
 import asyncio
 import threading
@@ -21,7 +23,7 @@ import random
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# HBSP Turbo 2.0 Constants
+# HBSP Turbo 2.0 Protocol Constants
 HBSP_MAGIC = b'HBSP'
 HBSP_VERSION = 2
 
@@ -40,14 +42,14 @@ OP_TURBO_CHANNEL_ACK = 0x13
 OP_TURBO_COMPLETE = 0x14
 OP_TURBO_COMPLETE_ACK = 0x15
 
-BUFFER_SIZE = 512 * 1024  # 512 KB zero-latency pipeline buffer
-NUM_TURBO_CHANNELS = 4
+BUFFER_SIZE = 1024 * 1024  # 1 MB zero-allocation high-throughput buffer
+NUM_TURBO_CHANNELS = 8
 
 class P2PwireApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("P2Pwire - Desktop Audio & Turbo Gigabit File Bridge")
-        self.geometry("520x750")
+        self.geometry("520x790")
         self.resizable(False, False)
         
         self.is_streaming = False
@@ -56,7 +58,7 @@ class P2PwireApp(ctk.CTk):
         self.is_scanning = False
         self.hbsp_cancel_flag = False
         self.selected_file_path = ctk.StringVar()
-        self.transfer_progress = ctk.StringVar(value="Status: Ready for Turbo Gigabit Transfer")
+        self.transfer_progress = ctk.StringVar(value="Status: Ready for 100 MB/s Turbo Gigabit Transfer")
         self.active_turbo_sessions = {}
 
         self.title_label = ctk.CTkLabel(self, text="🚀 P2Pwire Turbo Desktop Bridge", font=ctk.CTkFont(size=18, weight="bold"))
@@ -64,7 +66,7 @@ class P2PwireApp(ctk.CTk):
 
         self.subtitle_label = ctk.CTkLabel(
             self,
-            text="Real-time Audio Stream & 4x Parallel Sockets File Transfer (50-100+ MB/s)",
+            text="Real-time Audio Stream & 8x Parallel Sockets File Transfer (80-100+ MB/s)",
             font=ctk.CTkFont(size=12),
             text_color="#94A3B8"
         )
@@ -89,7 +91,7 @@ class P2PwireApp(ctk.CTk):
         self.ip_input_row = ctk.CTkFrame(self.ip_frame, fg_color="transparent")
         self.ip_input_row.pack(fill="x", pady=(4, 0))
 
-        self.ip_entry = ctk.CTkEntry(self.ip_input_row, placeholder_text="e.g. 192.168.43.1 or 10.x.x.x", height=38, font=ctk.CTkFont(size=13))
+        self.ip_entry = ctk.CTkEntry(self.ip_input_row, placeholder_text="e.g. 192.168.43.1 or 192.168.1.x", height=38, font=ctk.CTkFont(size=13))
         self.ip_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.ip_entry.insert(0, "192.168.43.1")
 
@@ -109,9 +111,9 @@ class P2PwireApp(ctk.CTk):
         self.status_label.pack(pady=6)
 
         # Compact log console
-        self.log_box = ctk.CTkTextbox(self, height=75, font=ctk.CTkFont(size=10), text_color="#38BDF8")
+        self.log_box = ctk.CTkTextbox(self, height=70, font=ctk.CTkFont(size=10), text_color="#38BDF8")
         self.log_box.pack(fill="x", padx=20, pady=(0, 10))
-        self.log_box.insert("0.0", "Ready. Turbo 4x HBSP on Port 8082 • Audio Stream on Port 8080\n")
+        self.log_box.insert("0.0", "Ready. Turbo 8x HBSP on Port 8082 • Audio Stream on Port 8080\n")
 
         # Background auto-detect & PC receiver
         threading.Thread(target=self.detect_android_device, args=(True,), daemon=True).start()
@@ -145,7 +147,7 @@ class P2PwireApp(ctk.CTk):
 
         ctk.CTkLabel(
             protocol_frame,
-            text="⚡ Turbo Multi-Socket Engine • 512KB Block Pipeline • Zero-Copy Wire Speed",
+            text="⚡ Smart Auto-Max Engine • 1MB Blocks • Zero-Allocation 100 MB/s",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#10B981"
         ).pack(pady=6)
@@ -180,40 +182,26 @@ class P2PwireApp(ctk.CTk):
         )
         self.lbl_progress.pack(pady=2)
 
-        # Socket Channel Selector (IDM Multi-Stream Engine)
-        sock_frame = ctk.CTkFrame(tab, fg_color="#1E293B", corner_radius=8)
-        sock_frame.pack(fill="x", padx=16, pady=(4, 6))
+        # Smart Auto-Max Badge
+        engine_frame = ctk.CTkFrame(tab, fg_color="#1E293B", corner_radius=8)
+        engine_frame.pack(fill="x", padx=16, pady=(4, 6))
 
         ctk.CTkLabel(
-            sock_frame,
-            text="Parallel Sockets (IDM Mode):",
+            engine_frame,
+            text="⚡ Transfer Engine: Smart Auto-Max",
             font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#CBD5E1"
+            text_color="#10B981"
         ).pack(side="left", padx=10, pady=4)
 
-        self.socket_selector = ctk.CTkSegmentedButton(
-            sock_frame,
-            values=["4x", "8x", "16x", "32x"],
-            selected_color="#10B981",
-            selected_hover_color="#059669",
-            height=26
-        )
-        self.socket_selector.pack(side="right", padx=8, pady=4)
-        self.socket_selector.set("16x")
-
-        # Hardware Speed Tip Frame
-        tip_frame = ctk.CTkFrame(tab, fg_color="#332400", corner_radius=8)
-        tip_frame.pack(fill="x", padx=16, pady=(0, 6))
         ctk.CTkLabel(
-            tip_frame,
-            text="⚠️ 2.4GHz Wi-Fi is physically capped at ~7 MB/s (56 Mbps) on all sockets.\n🚀 Set Phone Hotspot AP Band to 5.0 GHz (or plug USB cable) for 40–80 MB/s!",
+            engine_frame,
+            text="● Auto-Tuned (2x - 8x Sockets)",
             font=ctk.CTkFont(size=10, weight="bold"),
-            text_color="#FBBF24",
-            justify="left"
-        ).pack(padx=10, pady=5)
+            text_color="#38BDF8"
+        ).pack(side="right", padx=10, pady=4)
         
         btn_row = ctk.CTkFrame(tab, fg_color="transparent")
-        btn_row.pack(fill="x", padx=16, pady=(4, 10))
+        btn_row.pack(fill="x", padx=16, pady=(4, 6))
 
         self.btn_send_file = ctk.CTkButton(
             btn_row,
@@ -221,7 +209,7 @@ class P2PwireApp(ctk.CTk):
             command=self.send_file_hbsp,
             fg_color="#10B981",
             hover_color="#059669",
-            height=42,
+            height=40,
             font=ctk.CTkFont(size=13, weight="bold")
         )
         self.btn_send_file.pack(side="left", fill="x", expand=True, padx=(0, 6))
@@ -232,11 +220,36 @@ class P2PwireApp(ctk.CTk):
             command=self.cancel_hbsp_transfer,
             fg_color="#EF4444",
             hover_color="#DC2626",
-            height=42,
+            height=40,
             width=90,
             font=ctk.CTkFont(size=12, weight="bold")
         )
         self.btn_cancel_file.pack(side="right")
+
+        # Open received folder button
+        ctk.CTkButton(
+            tab,
+            text="📂 Open Received Files Folder (~/Downloads/P2PwireTransfers)",
+            command=self.open_received_folder,
+            height=34,
+            fg_color="#334155",
+            hover_color="#475569",
+            font=ctk.CTkFont(size=11, weight="bold")
+        ).pack(fill="x", padx=16, pady=(0, 8))
+
+    def open_received_folder(self):
+        downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads", "P2PwireTransfers")
+        os.makedirs(downloads_dir, exist_ok=True)
+        try:
+            if platform.system() == "Windows":
+                os.startfile(downloads_dir)
+            elif platform.system() == "Darwin":
+                subprocess.run(["open", downloads_dir])
+            else:
+                subprocess.run(["xdg-open", downloads_dir])
+            self.log(f"Opened received folder: {downloads_dir}")
+        except Exception as e:
+            self.log(f"Could not open folder: {e}")
 
     def log(self, msg):
         print(msg)
@@ -248,26 +261,96 @@ class P2PwireApp(ctk.CTk):
             self.canvas.itemconfig(self.pulse_text, state="hidden")
             return
             
+        data = np.frombuffer(pcm_data, dtype=np.int16)
+        if len(data) == 0:
+            return
+        
+        data_chunks = np.array_split(data, 40)
+        for i, chunk in enumerate(data_chunks):
+            if len(chunk) == 0:
+                continue
+            rms = np.sqrt(np.mean(chunk.astype(np.float32)**2))
+            height = min(rms / 120.0, 55.0)
+            self.canvas.coords(self.bars[i], i*10+4, 65 - height, i*10+10, 65 + height)
+            
         self.canvas.itemconfig(self.pulse_text, state="normal")
-        audio_data = np.frombuffer(pcm_data, dtype=np.int16)
-        chunk_size = len(audio_data) // 40
-        if chunk_size == 0: return
-        for i in range(40):
-            chunk = audio_data[i*chunk_size : (i+1)*chunk_size]
-            amp = np.abs(chunk).mean() / 32768 * 140
-            self.canvas.coords(self.bars[i], i*10+4, 65-amp, i*10+10, 65+amp)
+
+    def toggle_stream(self):
+        if not self.is_streaming:
+            ip = self.ip_entry.get().strip()
+            if not ip:
+                self.status_label.configure(text="● Please enter Android IP address", text_color="#EF4444")
+                return
+            self.is_streaming = True
+            self.btn_toggle.configure(text="⏹ Stop Streaming Audio", fg_color="#EF4444", hover_color="#DC2626")
+            self.status_label.configure(text="● Streaming Audio to Android Phone...", text_color="#34D399")
+            self.log(f"Connecting audio stream to ws://{ip}:8080/audio...")
+            self.thread = threading.Thread(target=self.start_asyncio_loop, args=(ip,), daemon=True)
+            self.thread.start()
+        else:
+            self.is_streaming = False
+            self.btn_toggle.configure(text="🔊 Start Streaming System Audio", fg_color="#06B6D4", hover_color="#0891B2")
+            self.status_label.configure(text="● Stream Stopped", text_color="#FBBF24")
+            self.log("Stopping audio stream...")
+            for bar in self.bars:
+                self.canvas.coords(bar, 0, 65, 0, 65)
+            self.canvas.itemconfig(self.pulse_text, state="hidden")
+
+    def start_asyncio_loop(self, ip):
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self.capture_and_stream(ip))
+
+    async def capture_and_stream(self, ip):
+        uri = f"ws://{ip}:8080/audio"
+        loopback_mic = None
+        try:
+            mics = sc.all_microphones(include_loopback=True)
+            for m in mics:
+                if m.isloopback:
+                    loopback_mic = m
+                    break
+            if not loopback_mic:
+                loopback_mic = sc.default_microphone()
+            self.log(f"Audio Device selected: {loopback_mic.name}")
+        except Exception as e:
+            self.log(f"Error accessing audio devices: {e}")
+            self.after(0, self.toggle_stream)
+            return
+
+        while self.is_streaming:
+            try:
+                self.log(f"Connecting to {uri}...")
+                async with websockets.connect(uri, ping_interval=5, ping_timeout=10, max_size=None) as websocket:
+                    self.log("✓ Connected to Android Audio Server! Audio streaming live.")
+                    samplerate = 48000
+                    blocksize = 480
+                    
+                    with loopback_mic.recorder(samplerate=samplerate, channels=2, blocksize=blocksize) as mic:
+                        while self.is_streaming:
+                            data = mic.record(numframes=blocksize)
+                            pcm16 = (data * 32767).clip(-32768, 32767).astype(np.int16).tobytes()
+                            await websocket.send(pcm16)
+                            self.after(0, self.update_waveform, pcm16)
+                            await asyncio.sleep(0.001)
+            except Exception as e:
+                if self.is_streaming:
+                    self.log(f"Stream error: {e}. Reconnecting in 2s...")
+                    await asyncio.sleep(2)
+                else:
+                    break
 
     def select_file(self):
-        file = filedialog.askopenfilename()
-        if file:
-            size_mb = os.path.getsize(file) / (1024 * 1024)
-            name = os.path.basename(file)
-            self.selected_file_path.set(f"{name} ({size_mb:.1f} MB)")
-            self._current_file_path = file
+        f = filedialog.askopenfilename()
+        if f:
+            self.selected_file_path.set(f)
+            sz_mb = os.path.getsize(f) / (1024 * 1024)
+            self.log(f"Selected file: {os.path.basename(f)} ({sz_mb:.2f} MB)")
+            self.transfer_progress.set(f"Selected: {os.path.basename(f)} ({sz_mb:.2f} MB)")
 
     def cancel_hbsp_transfer(self):
         self.hbsp_cancel_flag = True
-        self.log("Cancelling HBSP transfer...")
+        self.log("Cancelling Turbo transfer...")
 
     def update_transfer_ui(self, progress, status_text):
         self.progress_bar.set(progress)
@@ -278,15 +361,18 @@ class P2PwireApp(ctk.CTk):
         while len(data) < num_bytes:
             packet = sock.recv(num_bytes - len(data))
             if not packet:
-                raise EOFError(f"Connection closed while reading {num_bytes} bytes")
+                raise ConnectionError(f"Connection closed while reading {num_bytes} bytes (got {len(data)})")
             data.extend(packet)
-        return bytes(data)
+        return data
 
     def send_file_hbsp(self):
         ip = self.ip_entry.get().strip()
-        file_path = getattr(self, '_current_file_path', None)
-        if not ip or not file_path or not os.path.exists(file_path):
-            self.log("Error: Set valid Phone IP and Select a File first")
+        file_path = self.selected_file_path.get().strip()
+        if not ip:
+            self.update_transfer_ui(0.0, "Please enter Android IP address")
+            return
+        if not file_path or not os.path.isfile(file_path):
+            self.update_transfer_ui(0.0, "Please select a valid file from PC first")
             return
         
         self.btn_send_file.configure(state="disabled")
@@ -300,25 +386,25 @@ class P2PwireApp(ctk.CTk):
             file_name = os.path.basename(file_path)
             name_bytes = file_name.encode('utf-8')
             
-            # Read user selected socket channels (4x, 8x, 16x, 32x)
-            mode = getattr(self, 'socket_selector', None)
-            sel_val = mode.get() if mode else "16x"
-            channels_map = {"4x": 4, "8x": 8, "16x": 16, "32x": 32}
-            chosen_channels = channels_map.get(sel_val, 16)
-            num_channels = chosen_channels if file_size > (chosen_channels * 256 * 1024) else max(1, file_size // (256 * 1024))
+            # Smart Auto-Tune channels based on file size
+            if file_size < 5 * 1024 * 1024:
+                num_channels = 2
+            elif file_size < 40 * 1024 * 1024:
+                num_channels = 4
+            else:
+                num_channels = 8
             session_id = random.randint(100000, 999999)
 
-            self.log(f"Connecting to Turbo HBSP server at {ip}:8082 with {num_channels} parallel channels ({sel_val} IDM Mode)...")
-            self.after(0, lambda: self.update_transfer_ui(0.01, f"Opening {num_channels} Turbo Channels ({sel_val}) to {ip}:8082..."))
+            self.log(f"Connecting to Turbo HBSP server at {ip}:8082 with {num_channels} auto-tuned parallel channels...")
+            self.after(0, lambda: self.update_transfer_ui(0.01, f"Opening {num_channels} Turbo Channels to {ip}:8082..."))
             
             # 1. Connect Master Socket
             master_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             master_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            master_sock.settimeout(12.0)
+            master_sock.settimeout(25.0)
             master_sock.connect((ip, 8082))
             
             # 2. Send OP_TURBO_INIT
-            # [MAGIC: 4][VER: 1][OP: 1][SESSION_ID: 4][SIZE: 8][CHANNELS: 1][NAME_LEN: 2][NAME: N]
             init_header = bytearray()
             init_header.extend(HBSP_MAGIC)
             init_header.append(HBSP_VERSION)
@@ -332,12 +418,11 @@ class P2PwireApp(ctk.CTk):
             master_sock.sendall(init_header)
             
             # 3. Read OP_TURBO_INIT_ACK (11 bytes)
-            # [MAGIC: 4][VER: 1][OP: 1][SESSION_ID: 4][STATUS: 1]
             ack_data = self.recv_exact(master_sock, 11)
             if not ack_data.startswith(HBSP_MAGIC) or ack_data[5] != OP_TURBO_INIT_ACK or ack_data[10] != 0:
                 raise Exception(f"Turbo Handshake rejected: {ack_data}")
             
-            self.log(f"Turbo HBSP Handshake accepted! Sockets allocated. Streaming {file_name} ({file_size/(1024*1024):.1f} MB)...")
+            self.log(f"Turbo HBSP Handshake accepted! Streaming {file_name} ({file_size/(1024*1024):.1f} MB)...")
             
             # 4. Multi-Channel Worker Threads (Lock-Free High Throughput)
             part_size = file_size // num_channels
@@ -350,14 +435,13 @@ class P2PwireApp(ctk.CTk):
                     wsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     wsock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                     try:
-                        wsock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+                        wsock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 * 1024 * 1024)
                     except Exception:
                         pass
-                    wsock.settimeout(20.0)
+                    wsock.settimeout(25.0)
                     wsock.connect((ip, 8082))
                     
                     # Send OP_TURBO_CHANNEL_JOIN
-                    # [MAGIC: 4][VER: 1][OP: 1][SESSION_ID: 4][CH_IDX: 1][OFFSET: 8][LENGTH: 8]
                     jbuf = bytearray()
                     jbuf.extend(HBSP_MAGIC)
                     jbuf.append(HBSP_VERSION)
@@ -373,18 +457,19 @@ class P2PwireApp(ctk.CTk):
                     if jack[5] != OP_TURBO_CHANNEL_ACK or jack[6] != 0:
                         raise Exception(f"Channel {ch_idx} join failed")
                     
-                    # Stream raw 512KB binary blocks directly with zero lock contention
+                    buf = bytearray(BUFFER_SIZE)
+                    mv = memoryview(buf)
                     sent = 0
                     with open(file_path, 'rb') as f:
                         f.seek(start_offset)
                         while sent < length and not self.hbsp_cancel_flag:
                             to_read = min(BUFFER_SIZE, length - sent)
-                            chunk = f.read(to_read)
-                            if not chunk:
+                            n = f.readinto(mv[:to_read])
+                            if not n:
                                 break
-                            wsock.sendall(chunk)
-                            sent += len(chunk)
-                            thread_sent[ch_idx] = sent  # Lock-free array update
+                            wsock.sendall(mv[:n])
+                            sent += n
+                            thread_sent[ch_idx] = sent
                 except Exception as ex:
                     worker_errors.append(f"Channel {ch_idx} error: {ex}")
                 finally:
@@ -405,7 +490,6 @@ class P2PwireApp(ctk.CTk):
                 threads.append(t)
                 t.start()
             
-            # Progress loop monitoring combined throughput (Lock-free)
             while any(t.is_alive() for t in threads) and not self.hbsp_cancel_flag:
                 time.sleep(0.18)
                 now = time.time()
@@ -445,7 +529,7 @@ class P2PwireApp(ctk.CTk):
             if cack[5] == OP_TURBO_COMPLETE_ACK and cack[6] == 0:
                 total_time = max(0.1, time.time() - start_time)
                 avg_speed = (file_size / (1024 * 1024)) / total_time
-                self.log(f"✓ File successfully transferred via 4x Turbo in {total_time:.1f}s (Average Speed: {avg_speed:.1f} MB/s)!")
+                self.log(f"✓ File successfully transferred via Turbo in {total_time:.1f}s (Average Speed: {avg_speed:.1f} MB/s)!")
                 self.after(0, lambda: self.update_transfer_ui(1.0, f"✓ Complete! {file_size / (1024*1024):.1f} MB transferred at {avg_speed:.1f} MB/s in {total_time:.1f}s"))
             else:
                 raise Exception("Turbo completion ACK failed")
@@ -483,7 +567,6 @@ class P2PwireApp(ctk.CTk):
             op = sock.recv(1)[0]
             
             if op == OP_TURBO_INIT:
-                # Master connection
                 session_id = struct.unpack('>I', self.recv_exact(sock, 4))[0]
                 file_size = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
                 channels_cnt = sock.recv(1)[0]
@@ -494,12 +577,10 @@ class P2PwireApp(ctk.CTk):
                 os.makedirs(downloads_dir, exist_ok=True)
                 out_path = os.path.join(downloads_dir, file_name)
                 
-                # Pre-allocate file
                 with open(out_path, 'wb') as f:
                     f.truncate(file_size)
                 self.active_turbo_sessions[session_id] = out_path
                 
-                # Send OP_TURBO_INIT_ACK
                 ack = bytearray()
                 ack.extend(HBSP_MAGIC)
                 ack.append(HBSP_VERSION)
@@ -510,7 +591,6 @@ class P2PwireApp(ctk.CTk):
                 
                 self.log(f"Turbo receiving {file_name} ({file_size/(1024*1024):.1f} MB) on {channels_cnt} channels...")
                 
-                # Wait for OP_TURBO_COMPLETE
                 comp_op = sock.recv(1)
                 self.active_turbo_sessions.pop(session_id, None)
                 cack = bytearray()
@@ -527,7 +607,6 @@ class P2PwireApp(ctk.CTk):
                 start_offset = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
                 length = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
                 
-                # Send join ACK
                 jack = bytearray()
                 jack.extend(HBSP_MAGIC)
                 jack.append(HBSP_VERSION)
@@ -535,7 +614,13 @@ class P2PwireApp(ctk.CTk):
                 jack.append(0)
                 sock.sendall(jack)
                 
+                # Poll for active session with retry loop (prevents handshake timeouts)
                 target_path = self.active_turbo_sessions.get(session_id)
+                start_t = time.time()
+                while not target_path and (time.time() - start_t < 3.0):
+                    time.sleep(0.05)
+                    target_path = self.active_turbo_sessions.get(session_id)
+
                 if not target_path:
                     downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads", "P2PwireTransfers")
                     if os.path.exists(downloads_dir):
@@ -548,19 +633,21 @@ class P2PwireApp(ctk.CTk):
                             target_path = recent_files[0]
 
                 if target_path:
+                    buf = bytearray(BUFFER_SIZE)
+                    mv = memoryview(buf)
                     with open(target_path, 'r+b') as f:
                         f.seek(start_offset)
                         received = 0
                         while received < length:
                             to_read = min(BUFFER_SIZE, length - received)
-                            block = bytearray()
-                            while len(block) < to_read:
-                                chunk = sock.recv(to_read - len(block))
-                                if not chunk: break
-                                block.extend(chunk)
-                            if not block: break
-                            f.write(block)
-                            received += len(block)
+                            filled = 0
+                            while filled < to_read:
+                                n = sock.recv_into(mv[filled:to_read])
+                                if not n: break
+                                filled += n
+                            if filled == 0: break
+                            f.write(mv[:filled])
+                            received += filled
         except Exception as e:
             self.log(f"PC Receiver Error: {e}")
         finally:
@@ -583,192 +670,84 @@ class P2PwireApp(ctk.CTk):
         return None
 
     def start_auto_detect_thread(self):
-        if self.is_scanning: return
+        if self.is_scanning:
+            return
+        self.btn_detect.configure(state="disabled", text="Scanning...")
         threading.Thread(target=self.detect_android_device, args=(False,), daemon=True).start()
 
-    def detect_android_device(self, silent_startup=False):
+    def detect_android_device(self, silent=False):
         self.is_scanning = True
-        if not silent_startup:
-            self.after(0, lambda: self.btn_detect.configure(text="⏳ Scanning...", state="disabled"))
-            self.after(0, lambda: self.status_label.configure(text="● Scanning local network for Android Phone...", text_color="#38BDF8"))
-            self.log("Searching for Android P2Pwire receiver...")
-        
-        candidates = []
         try:
-            if platform.system() == "Windows":
-                out = subprocess.check_output("route print 0.0.0.0", shell=True, text=True, timeout=2)
-                for line in out.splitlines():
-                    parts = line.strip().split()
-                    if len(parts) >= 5 and parts[0] == "0.0.0.0" and parts[1] == "0.0.0.0":
-                        gw = parts[2]
-                        if gw not in ("0.0.0.0", "127.0.0.1") and gw not in candidates:
-                            candidates.append(gw)
-        except Exception:
-            pass
+            ip_found = None
+            gateways = set()
 
-        for gw in ["192.168.43.1", "192.168.44.1", "192.168.50.1", "192.168.42.129"]:
-            if gw not in candidates:
-                candidates.append(gw)
+            gateways.add("192.168.43.1")
+            gateways.add("192.168.42.129")
+            gateways.add("192.168.44.1")
 
-        found_ip = None
-        for cand in candidates:
-            if self.probe_ip(cand):
-                found_ip = cand
-                break
+            system_name = platform.system()
+            if system_name == "Windows":
+                try:
+                    res = subprocess.run(["ipconfig"], capture_output=True, text=True, timeout=2)
+                    for line in res.stdout.splitlines():
+                        if "Default Gateway" in line or "IPv4 Address" in line:
+                            parts = line.split(":")
+                            if len(parts) > 1:
+                                val = parts[1].strip()
+                                if val.startswith("192.168.") or val.startswith("10.") or val.startswith("172."):
+                                    if "Default Gateway" in line and val != "0.0.0.0":
+                                        gateways.add(val)
+                except Exception:
+                    pass
 
-        if not found_ip:
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.connect(("8.8.8.8", 80))
-                my_local_ip = s.getsockname()[0]
-                s.close()
-                prefix = ".".join(my_local_ip.split(".")[:3])
-                
-                with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-                    futures = [executor.submit(self.probe_ip, f"{prefix}.{i}") for i in range(1, 255)]
-                    for future in concurrent.futures.as_completed(futures):
+            for gw in list(gateways):
+                if self.probe_ip(gw):
+                    ip_found = gw
+                    break
+
+            if not ip_found:
+                subnets = set()
+                for gw in gateways:
+                    parts = gw.split('.')
+                    if len(parts) == 4:
+                        subnets.add(f"{parts[0]}.{parts[1]}.{parts[2]}")
+
+                ips_to_test = []
+                for s in subnets:
+                    for i in range(1, 25):
+                        ips_to_test.append(f"{s}.{i}")
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+                    futures = {executor.submit(self.probe_ip, ip): ip for ip in ips_to_test}
+                    for future in concurrent.futures.as_completed(futures, timeout=3.0):
                         res = future.result()
                         if res:
-                            found_ip = res
-                            break
-            except Exception:
-                pass
-        
-        self.is_scanning = False
-        if found_ip:
-            self.after(0, lambda: self.ip_entry.delete(0, "end"))
-            self.after(0, lambda: self.ip_entry.insert(0, found_ip))
-            self.after(0, lambda: self.status_label.configure(text=f"● Android Phone Found: {found_ip}", text_color="#34D399"))
-            self.log(f"Auto-Detected: {found_ip}")
-        else:
-            if not silent_startup:
-                self.after(0, lambda: self.status_label.configure(text="● Phone not found on network. Enter IP manually.", text_color="#F87171"))
-                self.log("Auto-detection finished: No active P2Pwire phone found on local subnet.")
-        self.after(0, lambda: self.btn_detect.configure(text="🔍 Auto-Detect", state="normal"))
-        return found_ip
-
-    def toggle_stream(self):
-        if not self.is_streaming:
-            ip = self.ip_entry.get().strip()
-            if not ip:
-                self.status_label.configure(text="● Auto-Detecting Android IP...", text_color="#22D3EE")
-                ip = self.detect_android_device(silent_startup=False)
-                if not ip: return
-
-            self.is_streaming = True
-            self.btn_toggle.configure(text="⏹️ Stop Streaming", fg_color="#EF4444", hover_color="#DC2626")
-            self.status_label.configure(text=f"● Connecting to {ip}...", text_color="#22D3EE")
-            self.log(f"Attempting connection to ws://{ip}:8080/ws/upload_audio...")
-            
-            self.thread = threading.Thread(target=self.run_async_stream, args=(ip,), daemon=True)
-            self.thread.start()
-        else:
-            self.is_streaming = False
-            self.btn_toggle.configure(text="🔊 Start Streaming System Audio", fg_color="#06B6D4", hover_color="#0891B2")
-            self.status_label.configure(text="● Status: Disconnected", text_color="#FBBF24")
-            self.log("Streaming stopped by user.")
-            self.canvas.itemconfig(self.pulse_text, state="hidden")
-
-    def run_async_stream(self, ip):
-        async def stream():
-            uri = f"ws://{ip}:8080/ws/upload_audio"
-            reconnect_attempts = 0
-
-            while self.is_streaming:
-                try:
-                    self.log(f"Opening WebSocket connection to {uri}...")
-                    async with websockets.connect(
-                        uri,
-                        ping_interval=20,
-                        ping_timeout=15,
-                        close_timeout=5,
-                        max_size=None
-                    ) as ws:
-                        reconnect_attempts = 0
-                        self.after(0, lambda: self.status_label.configure(text="● Connected! Initializing Audio Loopback...", text_color="#34D399"))
-                        self.log("WebSocket connection established successfully!")
-
-                        speaker = sc.default_speaker()
-                        mic = sc.get_microphone(id=speaker.name, include_loopback=True)
-                        self.log("Loopback audio capture device initialized successfully.")
-
-                        self.after(0, lambda: self.status_label.configure(text="● Streaming Live 48kHz System Audio...", text_color="#34D399"))
-
-                        audio_queue = asyncio.Queue(maxsize=15)
-                        stop_capture_event = threading.Event()
-
-                        def audio_producer():
-                            try:
-                                with mic.recorder(samplerate=48000, channels=2) as recorder:
-                                    while self.is_streaming and not stop_capture_event.is_set():
-                                        data = recorder.record(numframes=960)
-                                        mono = np.mean(data, axis=1)
-                                        d = np.clip(mono, -1.0, 1.0)
-                                        pcm16 = (d * 32767).astype(np.int16).tobytes()
-
-                                        if audio_queue.full():
-                                            try:
-                                                audio_queue.get_nowait()
-                                            except Exception:
-                                                pass
-                                        self.loop.call_soon_threadsafe(audio_queue.put_nowait, pcm16)
-                            except Exception as capture_err:
-                                if self.is_streaming and not stop_capture_event.is_set():
-                                    self.log(f"[CAPTURE ERROR] {capture_err}")
-
-                        capture_thread = threading.Thread(target=audio_producer, daemon=True)
-                        capture_thread.start()
-
-                        seq = 0
-                        stopped_by_phone = False
-                        while self.is_streaming:
-                            pcm16 = await audio_queue.get()
-                            h = bytearray(8)
-                            h[0], h[1], h[2] = 0xAB, 0x46, 0x01
-                            h[3], h[4] = (seq >> 8) & 0xFF, seq & 0xFF
-                            seq = (seq + 1) & 0xFFFF
-                            try:
-                                await ws.send(bytes(h) + pcm16)
-                                self.after(0, self.update_waveform, pcm16)
-                            except websockets.exceptions.ConnectionClosedOK:
-                                stopped_by_phone = True
-                                self.log("Audio playback stopped by Android phone.")
-                                break
-                            except Exception as send_ex:
-                                self.log(f"Stream send interrupted: {send_ex}")
-                                break
-
-                        stop_capture_event.set()
-                        if stopped_by_phone or not self.is_streaming:
-                            self.is_streaming = False
+                            ip_found = res
                             break
 
-                except Exception as e:
-                    err_msg = str(e)
-                    self.log(f"[STATUS] {err_msg}")
+            if ip_found:
+                self.after(0, lambda: self.on_device_found(ip_found))
+            else:
+                if not silent:
+                    self.after(0, lambda: self.status_label.configure(
+                        text="● Android not found. Verify Hotspot / USB Tethering.",
+                        text_color="#EF4444"
+                    ))
+        except Exception as e:
+            if not silent:
+                self.log(f"Auto-detect error: {e}")
+        finally:
+            self.is_scanning = False
+            self.after(0, lambda: self.btn_detect.configure(state="normal", text="🔍 Auto-Detect"))
 
-                if not self.is_streaming:
-                    break
-
-                reconnect_attempts += 1
-                if self.is_streaming:
-                    backoff = 2 if reconnect_attempts < 5 else 3
-                    self.log(f"Connection lost. Reconnecting in {backoff}s (Attempt #{reconnect_attempts})...")
-                    self.after(0, lambda: self.status_label.configure(text=f"● Reconnecting (Attempt #{reconnect_attempts})...", text_color="#FBBF24"))
-                    await asyncio.sleep(backoff)
-                else:
-                    break
-
-            self.after(0, lambda: self.status_label.configure(text="● Stopped / Ready to Connect", text_color="#FBBF24"))
-            self.after(0, lambda: self.btn_toggle.configure(text="🔊 Start Streaming System Audio", fg_color="#06B6D4", hover_color="#0891B2"))
-            self.after(0, lambda: self.status_label.configure(text="● Status: Ready to Connect", text_color="#34D399"))
-
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-        try:
-            self.loop.run_until_complete(stream())
-        except Exception as ex:
-            self.log(f"[FATAL] {ex}")
+    def on_device_found(self, ip):
+        self.ip_entry.delete(0, "end")
+        self.ip_entry.insert(0, ip)
+        self.status_label.configure(
+            text=f"● Android Device Connected at {ip} (Turbo Ready)",
+            text_color="#34D399"
+        )
+        self.log(f"Auto-detected Android device at {ip}")
 
 if __name__ == "__main__":
     app = P2PwireApp()
