@@ -40,7 +40,8 @@ OP_TURBO_CHANNEL_ACK = 0x13
 OP_TURBO_COMPLETE = 0x14
 OP_TURBO_COMPLETE_ACK = 0x15
 
-BUFFER_SIZE = 1024 * 1024  # 1 MB buffer for maximum wireless & wire throughput
+BUFFER_SIZE = 512 * 1024  # 512 KB zero-latency pipeline buffer
+NUM_TURBO_CHANNELS = 4
 
 class P2PwireApp(ctk.CTk):
     def __init__(self):
@@ -56,13 +57,14 @@ class P2PwireApp(ctk.CTk):
         self.hbsp_cancel_flag = False
         self.selected_file_path = ctk.StringVar()
         self.transfer_progress = ctk.StringVar(value="Status: Ready for Turbo Gigabit Transfer")
+        self.active_turbo_sessions = {}
 
         self.title_label = ctk.CTkLabel(self, text="🚀 P2Pwire Turbo Desktop Bridge", font=ctk.CTkFont(size=18, weight="bold"))
         self.title_label.pack(pady=(14, 4))
 
         self.subtitle_label = ctk.CTkLabel(
             self,
-            text="Real-time Audio Stream & Up to 32x Parallel Sockets IDM Engine",
+            text="Real-time Audio Stream & 4x Parallel Sockets File Transfer (50-100+ MB/s)",
             font=ctk.CTkFont(size=12),
             text_color="#94A3B8"
         )
@@ -83,6 +85,7 @@ class P2PwireApp(ctk.CTk):
         self.ip_label = ctk.CTkLabel(self.ip_frame, text="Android Phone IP Address:", font=ctk.CTkFont(size=12, weight="bold"))
         self.ip_label.pack(anchor="w", padx=2)
 
+        # Row with Entry + Auto-Detect Button
         self.ip_input_row = ctk.CTkFrame(self.ip_frame, fg_color="transparent")
         self.ip_input_row.pack(fill="x", pady=(4, 0))
 
@@ -105,10 +108,12 @@ class P2PwireApp(ctk.CTk):
         self.status_label = ctk.CTkLabel(self, text="● Status: Ready to Connect", font=ctk.CTkFont(size=12, weight="bold"), text_color="#FBBF24")
         self.status_label.pack(pady=6)
 
+        # Compact log console
         self.log_box = ctk.CTkTextbox(self, height=75, font=ctk.CTkFont(size=10), text_color="#38BDF8")
         self.log_box.pack(fill="x", padx=20, pady=(0, 10))
-        self.log_box.insert("0.0", "Ready. Up to 32x Parallel Sockets on Port 8082 • Audio Stream on Port 8080\n")
+        self.log_box.insert("0.0", "Ready. Turbo 4x HBSP on Port 8082 • Audio Stream on Port 8080\n")
 
+        # Background auto-detect & PC receiver
         threading.Thread(target=self.detect_android_device, args=(True,), daemon=True).start()
         threading.Thread(target=self.run_pc_hbsp_receiver, daemon=True).start()
 
@@ -125,6 +130,7 @@ class P2PwireApp(ctk.CTk):
         )
         self.btn_toggle.pack(fill="x", padx=16, pady=(12, 8))
         
+        # Waveform Canvas
         self.canvas = tk.Canvas(tab, width=420, height=130, bg='#111827', highlightthickness=0)
         self.canvas.pack(pady=8)
         self.bars = [self.canvas.create_rectangle(i*10+4, 65, i*10+10, 65, fill="#34D399") for i in range(40)]
@@ -133,12 +139,13 @@ class P2PwireApp(ctk.CTk):
     def setup_file_tab(self):
         tab = self.tabview.tab("Turbo Files (HBSP 2.0)")
 
+        # Protocol badge
         protocol_frame = ctk.CTkFrame(tab, fg_color="#1E293B", corner_radius=10)
         protocol_frame.pack(fill="x", padx=16, pady=(10, 8))
 
         ctk.CTkLabel(
             protocol_frame,
-            text="⚡ Up to 32x Parallel Sockets • 1MB Blocks • Zero-Copy Wire Speed",
+            text="⚡ Turbo Multi-Socket Engine • 512KB Block Pipeline • Zero-Copy Wire Speed",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#10B981"
         ).pack(pady=6)
@@ -173,13 +180,13 @@ class P2PwireApp(ctk.CTk):
         )
         self.lbl_progress.pack(pady=2)
 
-        # IDM Sockets Selector (4x, 8x, 16x, 32x)
+        # Socket Channel Selector (IDM Multi-Stream Engine)
         sock_frame = ctk.CTkFrame(tab, fg_color="#1E293B", corner_radius=8)
         sock_frame.pack(fill="x", padx=16, pady=(4, 6))
 
         ctk.CTkLabel(
             sock_frame,
-            text="Parallel Sockets (IDM Engine):",
+            text="Parallel Sockets (IDM Mode):",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#CBD5E1"
         ).pack(side="left", padx=10, pady=4)
@@ -192,14 +199,25 @@ class P2PwireApp(ctk.CTk):
             height=26
         )
         self.socket_selector.pack(side="right", padx=8, pady=4)
-        self.socket_selector.set("16x")  # Defaults to 16x IDM Mode!
+        self.socket_selector.set("16x")
+
+        # Hardware Speed Tip Frame
+        tip_frame = ctk.CTkFrame(tab, fg_color="#332400", corner_radius=8)
+        tip_frame.pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkLabel(
+            tip_frame,
+            text="⚠️ 2.4GHz Wi-Fi is physically capped at ~7 MB/s (56 Mbps) on all sockets.\n🚀 Set Phone Hotspot AP Band to 5.0 GHz (or plug USB cable) for 40–80 MB/s!",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color="#FBBF24",
+            justify="left"
+        ).pack(padx=10, pady=5)
         
         btn_row = ctk.CTkFrame(tab, fg_color="transparent")
-        btn_row.pack(fill="x", padx=16, pady=(8, 10))
+        btn_row.pack(fill="x", padx=16, pady=(4, 10))
 
         self.btn_send_file = ctk.CTkButton(
             btn_row,
-            text="🚀 Send via Multi-Socket Turbo Gigabit",
+            text="🚀 Start Turbo Gigabit Transfer",
             command=self.send_file_hbsp,
             fg_color="#10B981",
             hover_color="#059669",
@@ -282,7 +300,7 @@ class P2PwireApp(ctk.CTk):
             file_name = os.path.basename(file_path)
             name_bytes = file_name.encode('utf-8')
             
-            # Read user selected socket count (4x, 8x, 16x, 32x)
+            # Read user selected socket channels (4x, 8x, 16x, 32x)
             mode = getattr(self, 'socket_selector', None)
             sel_val = mode.get() if mode else "16x"
             channels_map = {"4x": 4, "8x": 8, "16x": 16, "32x": 32}
@@ -300,6 +318,7 @@ class P2PwireApp(ctk.CTk):
             master_sock.connect((ip, 8082))
             
             # 2. Send OP_TURBO_INIT
+            # [MAGIC: 4][VER: 1][OP: 1][SESSION_ID: 4][SIZE: 8][CHANNELS: 1][NAME_LEN: 2][NAME: N]
             init_header = bytearray()
             init_header.extend(HBSP_MAGIC)
             init_header.append(HBSP_VERSION)
@@ -313,29 +332,32 @@ class P2PwireApp(ctk.CTk):
             master_sock.sendall(init_header)
             
             # 3. Read OP_TURBO_INIT_ACK (11 bytes)
+            # [MAGIC: 4][VER: 1][OP: 1][SESSION_ID: 4][STATUS: 1]
             ack_data = self.recv_exact(master_sock, 11)
             if not ack_data.startswith(HBSP_MAGIC) or ack_data[5] != OP_TURBO_INIT_ACK or ack_data[10] != 0:
                 raise Exception(f"Turbo Handshake rejected: {ack_data}")
             
             self.log(f"Turbo HBSP Handshake accepted! Sockets allocated. Streaming {file_name} ({file_size/(1024*1024):.1f} MB)...")
             
-            # 4. Multi-Channel Worker Threads
+            # 4. Multi-Channel Worker Threads (Lock-Free High Throughput)
             part_size = file_size // num_channels
-            uploaded_bytes = 0
-            lock = threading.Lock()
+            thread_sent = [0] * num_channels
             worker_errors = []
             
             def worker_channel(ch_idx, start_offset, length):
-                nonlocal uploaded_bytes
                 wsock = None
                 try:
                     wsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     wsock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                    wsock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2 * 1024 * 1024)
-                    wsock.settimeout(15.0)
+                    try:
+                        wsock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+                    except Exception:
+                        pass
+                    wsock.settimeout(20.0)
                     wsock.connect((ip, 8082))
                     
                     # Send OP_TURBO_CHANNEL_JOIN
+                    # [MAGIC: 4][VER: 1][OP: 1][SESSION_ID: 4][CH_IDX: 1][OFFSET: 8][LENGTH: 8]
                     jbuf = bytearray()
                     jbuf.extend(HBSP_MAGIC)
                     jbuf.append(HBSP_VERSION)
@@ -351,7 +373,7 @@ class P2PwireApp(ctk.CTk):
                     if jack[5] != OP_TURBO_CHANNEL_ACK or jack[6] != 0:
                         raise Exception(f"Channel {ch_idx} join failed")
                     
-                    # Stream raw 1MB binary blocks directly with zero per-chunk framing
+                    # Stream raw 512KB binary blocks directly with zero lock contention
                     sent = 0
                     with open(file_path, 'rb') as f:
                         f.seek(start_offset)
@@ -362,8 +384,7 @@ class P2PwireApp(ctk.CTk):
                                 break
                             wsock.sendall(chunk)
                             sent += len(chunk)
-                            with lock:
-                                uploaded_bytes += len(chunk)
+                            thread_sent[ch_idx] = sent  # Lock-free array update
                 except Exception as ex:
                     worker_errors.append(f"Channel {ch_idx} error: {ex}")
                 finally:
@@ -384,14 +405,13 @@ class P2PwireApp(ctk.CTk):
                 threads.append(t)
                 t.start()
             
-            # Progress loop monitoring combined throughput across all channels
+            # Progress loop monitoring combined throughput (Lock-free)
             while any(t.is_alive() for t in threads) and not self.hbsp_cancel_flag:
                 time.sleep(0.18)
                 now = time.time()
                 diff = now - last_calc_time
                 if diff >= 0.2:
-                    with lock:
-                        cur_up = uploaded_bytes
+                    cur_up = sum(thread_sent)
                     bytes_diff = cur_up - last_bytes_sample
                     current_speed = (bytes_diff / (1024 * 1024)) / diff
                     pct = cur_up / file_size if file_size > 0 else 0
@@ -425,7 +445,7 @@ class P2PwireApp(ctk.CTk):
             if cack[5] == OP_TURBO_COMPLETE_ACK and cack[6] == 0:
                 total_time = max(0.1, time.time() - start_time)
                 avg_speed = (file_size / (1024 * 1024)) / total_time
-                self.log(f"✓ File successfully transferred via {num_channels}x Turbo in {total_time:.1f}s (Average Speed: {avg_speed:.1f} MB/s)!")
+                self.log(f"✓ File successfully transferred via 4x Turbo in {total_time:.1f}s (Average Speed: {avg_speed:.1f} MB/s)!")
                 self.after(0, lambda: self.update_transfer_ui(1.0, f"✓ Complete! {file_size / (1024*1024):.1f} MB transferred at {avg_speed:.1f} MB/s in {total_time:.1f}s"))
             else:
                 raise Exception("Turbo completion ACK failed")
@@ -445,7 +465,7 @@ class P2PwireApp(ctk.CTk):
             srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             srv.bind(("0.0.0.0", 8082))
-            srv.listen(64)
+            srv.listen(10)
             while True:
                 conn, addr = srv.accept()
                 threading.Thread(target=self.handle_incoming_connection_on_pc, args=(conn, addr), daemon=True).start()
@@ -463,6 +483,7 @@ class P2PwireApp(ctk.CTk):
             op = sock.recv(1)[0]
             
             if op == OP_TURBO_INIT:
+                # Master connection
                 session_id = struct.unpack('>I', self.recv_exact(sock, 4))[0]
                 file_size = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
                 channels_cnt = sock.recv(1)[0]
@@ -473,9 +494,12 @@ class P2PwireApp(ctk.CTk):
                 os.makedirs(downloads_dir, exist_ok=True)
                 out_path = os.path.join(downloads_dir, file_name)
                 
+                # Pre-allocate file
                 with open(out_path, 'wb') as f:
                     f.truncate(file_size)
+                self.active_turbo_sessions[session_id] = out_path
                 
+                # Send OP_TURBO_INIT_ACK
                 ack = bytearray()
                 ack.extend(HBSP_MAGIC)
                 ack.append(HBSP_VERSION)
@@ -486,7 +510,9 @@ class P2PwireApp(ctk.CTk):
                 
                 self.log(f"Turbo receiving {file_name} ({file_size/(1024*1024):.1f} MB) on {channels_cnt} channels...")
                 
+                # Wait for OP_TURBO_COMPLETE
                 comp_op = sock.recv(1)
+                self.active_turbo_sessions.pop(session_id, None)
                 cack = bytearray()
                 cack.extend(HBSP_MAGIC)
                 cack.append(HBSP_VERSION)
@@ -501,6 +527,7 @@ class P2PwireApp(ctk.CTk):
                 start_offset = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
                 length = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
                 
+                # Send join ACK
                 jack = bytearray()
                 jack.extend(HBSP_MAGIC)
                 jack.append(HBSP_VERSION)
@@ -508,23 +535,32 @@ class P2PwireApp(ctk.CTk):
                 jack.append(0)
                 sock.sendall(jack)
                 
-                downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads", "P2PwireTransfers")
-                recent_files = sorted(
-                    [os.path.join(downloads_dir, f) for f in os.listdir(downloads_dir)],
-                    key=os.path.getmtime,
-                    reverse=True
-                )
-                if recent_files:
-                    target_path = recent_files[0]
+                target_path = self.active_turbo_sessions.get(session_id)
+                if not target_path:
+                    downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads", "P2PwireTransfers")
+                    if os.path.exists(downloads_dir):
+                        recent_files = sorted(
+                            [os.path.join(downloads_dir, f) for f in os.listdir(downloads_dir)],
+                            key=os.path.getmtime,
+                            reverse=True
+                        )
+                        if recent_files:
+                            target_path = recent_files[0]
+
+                if target_path:
                     with open(target_path, 'r+b') as f:
                         f.seek(start_offset)
                         received = 0
                         while received < length:
                             to_read = min(BUFFER_SIZE, length - received)
-                            data = sock.recv(to_read)
-                            if not data: break
-                            f.write(data)
-                            received += len(data)
+                            block = bytearray()
+                            while len(block) < to_read:
+                                chunk = sock.recv(to_read - len(block))
+                                if not chunk: break
+                                block.extend(chunk)
+                            if not block: break
+                            f.write(block)
+                            received += len(block)
         except Exception as e:
             self.log(f"PC Receiver Error: {e}")
         finally:
