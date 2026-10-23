@@ -296,6 +296,7 @@ class P2PwireApp(ctk.CTk):
 
         self.setup_received_list(self.subtab_received)
         self.setup_sent_list(self.subtab_sent)
+        self.refresh_file_lists()
 
     def setup_received_list(self, subtab):
         header_row = ctk.CTkFrame(subtab, fg_color="transparent")
@@ -306,7 +307,6 @@ class P2PwireApp(ctk.CTk):
 
         self.received_scroll = ctk.CTkScrollableFrame(subtab, fg_color="transparent", height=240)
         self.received_scroll.pack(fill="both", expand=True, padx=2, pady=2)
-        self.refresh_file_lists()
 
     def setup_sent_list(self, subtab):
         header_row = ctk.CTkFrame(subtab, fg_color="transparent")
@@ -319,27 +319,29 @@ class P2PwireApp(ctk.CTk):
         self.sent_scroll.pack(fill="both", expand=True, padx=2, pady=2)
 
     def refresh_file_lists(self):
-        for widget in self.received_scroll.winfo_children():
-            widget.destroy()
+        if 'received_scroll' in self.__dict__:
+            for widget in self.received_scroll.winfo_children():
+                widget.destroy()
 
-        try:
-            files = sorted([os.path.join(self.received_folder, f) for f in os.listdir(self.received_folder)], key=os.path.getmtime, reverse=True)
-            for fpath in files:
-                if os.path.isfile(fpath):
-                    self.add_file_card(self.received_scroll, fpath, is_received=True)
-        except Exception:
-            pass
+            try:
+                files = sorted([os.path.join(self.received_folder, f) for f in os.listdir(self.received_folder)], key=os.path.getmtime, reverse=True)
+                for fpath in files:
+                    if os.path.isfile(fpath):
+                        self.add_file_card(self.received_scroll, fpath, is_received=True)
+            except Exception:
+                pass
 
-        for widget in self.sent_scroll.winfo_children():
-            widget.destroy()
+        if 'sent_scroll' in self.__dict__:
+            for widget in self.sent_scroll.winfo_children():
+                widget.destroy()
 
-        try:
-            files = sorted([os.path.join(self.sent_folder, f) for f in os.listdir(self.sent_folder)], key=os.path.getmtime, reverse=True)
-            for fpath in files:
-                if os.path.isfile(fpath):
-                    self.add_file_card(self.sent_scroll, fpath, is_received=False)
-        except Exception:
-            pass
+            try:
+                files = sorted([os.path.join(self.sent_folder, f) for f in os.listdir(self.sent_folder)], key=os.path.getmtime, reverse=True)
+                for fpath in files:
+                    if os.path.isfile(fpath):
+                        self.add_file_card(self.sent_scroll, fpath, is_received=False)
+            except Exception:
+                pass
 
     def add_file_card(self, parent, fpath, is_received):
         fname = os.path.basename(fpath)
