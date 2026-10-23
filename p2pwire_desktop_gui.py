@@ -295,7 +295,7 @@ class P2PwireApp(ctk.CTk):
         ).pack(fill="x", padx=16, pady=(0, 10))
 
     def open_received_folder(self):
-        downloads_dir = self.save_directory_path.get() if hasattr(self, 'save_directory_path') else os.path.join(os.path.expanduser("~"), "Downloads", "P2PwireTransfers")
+        downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads", "P2PwireTransfers")
         os.makedirs(downloads_dir, exist_ok=True)
         try:
             if platform.system() == "Windows":
@@ -390,10 +390,6 @@ class P2PwireApp(ctk.CTk):
             file_name = os.path.basename(file_path)
             name_bytes = file_name.encode('utf-8')
             
-            # Auto-tune optimal parallel channels for maximum hardware saturation
-            # Small files (<5MB): 2 sockets (avoids handshake overhead)
-            # Medium files (5MB-40MB): 4 sockets
-            # Large files (>40MB): 8 sockets (saturates 100+ MB/s wire speed without GIL contention)
             if file_size < 5 * 1024 * 1024:
                 num_channels = 2
             elif file_size < 40 * 1024 * 1024:
@@ -405,13 +401,11 @@ class P2PwireApp(ctk.CTk):
             self.log(f"Connecting to Turbo HBSP server at {ip}:8082 with {num_channels} auto-tuned parallel channels (Auto-Max Mode)...")
             self.after(0, lambda: self.update_transfer_ui(0.01, f"Opening {num_channels} Turbo Channels to {ip}:8082..."))
             
-            # 1. Connect Master Socket
             master_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             master_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             master_sock.settimeout(12.0)
             master_sock.connect((ip, 8082))
             
-            # 2. Send OP_TURBO_INIT
             init_header = bytearray()
             init_header.extend(HBSP_MAGIC)
             init_header.append(HBSP_VERSION)
@@ -424,14 +418,12 @@ class P2PwireApp(ctk.CTk):
             
             master_sock.sendall(init_header)
             
-            # 3. Read OP_TURBO_INIT_ACK (11 bytes)
             ack_data = self.recv_exact(master_sock, 11)
             if not ack_data.startswith(HBSP_MAGIC) or ack_data[5] != OP_TURBO_INIT_ACK or ack_data[10] != 0:
                 raise Exception(f"Turbo Handshake rejected: {ack_data}")
             
             self.log(f"Turbo HBSP Handshake accepted! Sockets allocated. Streaming {file_name} ({file_size/(1024*1024):.1f} MB)...")
             
-            # 4. Multi-Channel Worker Threads (Lock-Free High Throughput)
             part_size = file_size // num_channels
             thread_sent = [0] * num_channels
             worker_errors = []
@@ -448,7 +440,6 @@ class P2PwireApp(ctk.CTk):
                     wsock.settimeout(20.0)
                     wsock.connect((ip, 8082))
                     
-                    # Send OP_TURBO_CHANNEL_JOIN
                     jbuf = bytearray()
                     jbuf.extend(HBSP_MAGIC)
                     jbuf.append(HBSP_VERSION)
@@ -459,12 +450,10 @@ class P2PwireApp(ctk.CTk):
                     jbuf.extend(struct.pack('>Q', length))
                     wsock.sendall(jbuf)
                     
-                    # Receive JOIN_ACK (7 bytes)
                     jack = self.recv_exact(wsock, 7)
                     if jack[5] != OP_TURBO_CHANNEL_ACK or jack[6] != 0:
                         raise Exception(f"Channel {ch_idx} join failed")
                     
-                    # Zero-allocation high-throughput wire streaming:
                     buf = bytearray(BUFFER_SIZE)
                     mv = memoryview(buf)
                     sent = 0
@@ -485,7 +474,6 @@ class P2PwireApp(ctk.CTk):
                         try: wsock.close()
                         except: pass
 
-            # Launch all worker threads in parallel
             start_time = time.time()
             last_calc_time = start_time
             last_bytes_sample = 0
@@ -498,7 +486,6 @@ class P2PwireApp(ctk.CTk):
                 threads.append(t)
                 t.start()
             
-            # Progress loop monitoring combined throughput (Lock-free)
             while any(t.is_alive() for t in threads) and not self.hbsp_cancel_flag:
                 time.sleep(0.18)
                 now = time.time()
@@ -530,10 +517,7 @@ class P2PwireApp(ctk.CTk):
             if worker_errors:
                 raise Exception("; ".join(worker_errors))
 
-            # 5. Send OP_TURBO_COMPLETE on master socket
             master_sock.sendall(bytes([OP_TURBO_COMPLETE]))
-            
-            # 6. Receive OP_TURBO_COMPLETE_ACK (7 bytes)
             cack = self.recv_exact(master_sock, 7)
             if cack[5] == OP_TURBO_COMPLETE_ACK and cack[6] == 0:
                 total_time = max(0.1, time.time() - start_time)
@@ -552,7 +536,6 @@ class P2PwireApp(ctk.CTk):
                 except: pass
             self.after(0, lambda: self.btn_send_file.configure(state="normal"))
 
-    # PC Background HBSP Receiver
     def run_pc_hbsp_receiver(self):
         try:
             srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -576,7 +559,6 @@ class P2PwireApp(ctk.CTk):
             op = sock.recv(1)[0]
             
             if op == OP_TURBO_INIT:
-                # Master connection
                 session_id = struct.unpack('>I', self.recv_exact(sock, 4))[0]
                 file_size = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
                 channels_cnt = sock.recv(1)[0]
@@ -587,12 +569,10 @@ class P2PwireApp(ctk.CTk):
                 os.makedirs(downloads_dir, exist_ok=True)
                 out_path = os.path.join(downloads_dir, file_name)
                 
-                # Pre-allocate file
                 with open(out_path, 'wb') as f:
                     f.truncate(file_size)
                 self.active_turbo_sessions[session_id] = out_path
                 
-                # Send OP_TURBO_INIT_ACK
                 ack = bytearray()
                 ack.extend(HBSP_MAGIC)
                 ack.append(HBSP_VERSION)
@@ -603,7 +583,6 @@ class P2PwireApp(ctk.CTk):
                 
                 self.log(f"Turbo receiving {file_name} ({file_size/(1024*1024):.1f} MB) on {channels_cnt} channels...")
                 
-                # Wait for OP_TURBO_COMPLETE
                 comp_op = sock.recv(1)
                 self.active_turbo_sessions.pop(session_id, None)
                 cack = bytearray()
@@ -620,7 +599,6 @@ class P2PwireApp(ctk.CTk):
                 start_offset = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
                 length = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
                 
-                # Send join ACK
                 jack = bytearray()
                 jack.extend(HBSP_MAGIC)
                 jack.append(HBSP_VERSION)
