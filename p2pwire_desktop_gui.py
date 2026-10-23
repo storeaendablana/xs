@@ -190,7 +190,6 @@ class P2PwireApp(ctk.CTk):
     def setup_audio_tab_content(self):
         tab = self.tab_audio
 
-        # Top Audio Info Banner
         info_banner = ctk.CTkFrame(tab, fg_color="#0B132B", corner_radius=10, border_width=1, border_color="#1E293B")
         info_banner.pack(fill="x", padx=12, pady=(8, 6))
 
@@ -212,7 +211,6 @@ class P2PwireApp(ctk.CTk):
         )
         self.canvas_visualizer.pack(fill="x", padx=12, pady=6)
 
-        # Pre-create bars and peak lines on canvas
         self.bar_items = []
         self.peak_items = []
         bar_count = 44
@@ -222,9 +220,7 @@ class P2PwireApp(ctk.CTk):
         for i in range(bar_count):
             x1 = start_x + i * (bar_w + gap)
             x2 = x1 + bar_w
-            # Bar rectangle
             b = self.canvas_visualizer.create_rectangle(x1, 70, x2, 70, fill="#1E293B", outline="")
-            # Peak cap
             p = self.canvas_visualizer.create_line(x1, 70, x2, 70, fill="#38BDF8", width=2)
             self.bar_items.append(b)
             self.peak_items.append(p)
@@ -236,7 +232,6 @@ class P2PwireApp(ctk.CTk):
             font=("Segoe UI", 11, "italic")
         )
 
-        # Stream Toggle Button (Glowing modern button)
         self.btn_toggle_stream = ctk.CTkButton(
             tab,
             text="▶ Start Streaming PC System Audio to Phone",
@@ -249,7 +244,6 @@ class P2PwireApp(ctk.CTk):
         )
         self.btn_toggle_stream.pack(fill="x", padx=12, pady=(8, 6))
 
-        # Audio Metrics HUD
         hud_frame = ctk.CTkFrame(tab, fg_color="#0F172A", corner_radius=10, border_width=1, border_color="#1E293B")
         hud_frame.pack(fill="x", padx=12, pady=4)
 
@@ -268,7 +262,6 @@ class P2PwireApp(ctk.CTk):
     def setup_files_tab_content(self):
         tab = self.tab_files
 
-        # Protocol badge
         proto_card = ctk.CTkFrame(tab, fg_color="#06281E", corner_radius=10, border_width=1, border_color="#0F5132")
         proto_card.pack(fill="x", padx=12, pady=(8, 6))
 
@@ -279,7 +272,6 @@ class P2PwireApp(ctk.CTk):
             text_color=CLR_ACCENT_GREEN
         ).pack(pady=6)
 
-        # File Drop/Select Card
         select_card = ctk.CTkFrame(tab, fg_color="#0F172A", corner_radius=10, border_width=1, border_color="#1E293B")
         select_card.pack(fill="x", padx=12, pady=4)
 
@@ -304,7 +296,6 @@ class P2PwireApp(ctk.CTk):
         )
         self.lbl_selected_file.pack(padx=12, pady=(0, 8))
 
-        # Dynamic Shimmer Transfer Progress Canvas
         self.canvas_progress = tk.Canvas(
             tab,
             width=580,
@@ -323,7 +314,6 @@ class P2PwireApp(ctk.CTk):
             font=("Segoe UI", 11, "bold")
         )
 
-        # Real-time Speed & Stats HUD
         stats_frame = ctk.CTkFrame(tab, fg_color="#0F172A", corner_radius=10, border_width=1, border_color="#1E293B")
         stats_frame.pack(fill="x", padx=12, pady=4)
 
@@ -343,7 +333,6 @@ class P2PwireApp(ctk.CTk):
         )
         self.lbl_transfer_stats.pack(pady=(0, 6))
 
-        # Save Directory Card
         save_card = ctk.CTkFrame(tab, fg_color="#0F172A", corner_radius=10, border_width=1, border_color="#1E293B")
         save_card.pack(fill="x", padx=12, pady=4)
 
@@ -391,7 +380,6 @@ class P2PwireApp(ctk.CTk):
         )
         self.lbl_save_dir.pack(fill="x", padx=10, pady=(0, 6))
 
-        # Action Buttons
         action_row = ctk.CTkFrame(tab, fg_color="transparent")
         action_row.pack(fill="x", padx=12, pady=(6, 8))
 
@@ -506,14 +494,12 @@ class P2PwireApp(ctk.CTk):
             pass
 
     # =========================================================================
-    # DYNAMIC ANIMATION ENGINE
+    # ANIMATION & VISUALIZER ENGINE
     # =========================================================================
     def animate_loop(self):
         self.anim_tick += 1
 
-        # 1. Animate Audio Visualizer
         if not self.is_streaming:
-            # Gentle breathing wave animation when idle
             self.canvas_visualizer.itemconfig(self.canvas_hint, state="normal")
             for i in range(len(self.bar_items)):
                 wave = math.sin(self.anim_tick * 0.08 + i * 0.22) * 12 + 14
@@ -523,19 +509,13 @@ class P2PwireApp(ctk.CTk):
                 self.canvas_visualizer.itemconfig(self.peak_items[i], fill="#334155")
         else:
             self.canvas_visualizer.itemconfig(self.canvas_hint, state="hidden")
-            # Dynamic decay physics for audio bars
             for i in range(len(self.bar_items)):
                 cur = self.waveform_levels[i]
                 peak = self.waveform_peaks[i]
-
-                # Decay peak cap slowly
                 peak = max(cur, peak - 1.2)
                 self.waveform_peaks[i] = peak
-
-                # Decay bar height smoothly
                 self.waveform_levels[i] = max(2.0, cur * 0.88)
 
-                # Gradient color transition: Cyan -> Violet -> Pink
                 if cur > 50:
                     bar_color = CLR_ACCENT_PINK
                 elif cur > 28:
@@ -547,11 +527,9 @@ class P2PwireApp(ctk.CTk):
                 x2 = x1 + 9
                 self.canvas_visualizer.coords(self.bar_items[i], x1, 70 - cur, x2, 70 + cur)
                 self.canvas_visualizer.itemconfig(self.bar_items[i], fill=bar_color)
-
                 self.canvas_visualizer.coords(self.peak_items[i], x1, 70 - peak - 2, x2, 70 - peak - 2)
                 self.canvas_visualizer.itemconfig(self.peak_items[i], fill="#38BDF8")
 
-        # 2. Animate File Transfer Laser Shimmer
         if self.is_transferring:
             self.laser_pos = (self.laser_pos + 18) % 580
             self.canvas_progress.itemconfig(self.laser_rect, state="normal")
@@ -559,7 +537,6 @@ class P2PwireApp(ctk.CTk):
         else:
             self.canvas_progress.itemconfig(self.laser_rect, state="hidden")
 
-        # Re-schedule next frame (approx 33 FPS)
         self.after(30, self.animate_loop)
 
     def update_waveform_from_pcm(self, pcm_bytes):
@@ -579,7 +556,7 @@ class P2PwireApp(ctk.CTk):
             pass
 
     # =========================================================================
-    # AUDIO STREAMING LOGIC (Bulletproof Single-Thread Architecture)
+    # AUDIO STREAMING LOGIC
     # =========================================================================
     def toggle_stream(self):
         if not self.is_streaming:
@@ -624,7 +601,6 @@ class P2PwireApp(ctk.CTk):
             while self.is_streaming and not self.stop_stream_event.is_set():
                 ws = None
                 try:
-                    self.log(f"Connecting WebSocket to {uri}...")
                     ws = await websockets.connect(
                         uri,
                         ping_interval=20,
@@ -636,7 +612,6 @@ class P2PwireApp(ctk.CTk):
                     self.after(0, lambda: self.status_pill.configure(text="● STREAMING LIVE", text_color=CLR_ACCENT_GREEN))
                     self.log("Connected to phone speaker! Initializing loopback audio capture...")
 
-                    # Initialize loopback microphone
                     if not HAS_SOUNDCARD:
                         raise RuntimeError("Python 'soundcard' module not found. Run: pip install soundcard")
 
@@ -645,7 +620,6 @@ class P2PwireApp(ctk.CTk):
                     try:
                         mic = sc.get_microphone(id=speaker.name, include_loopback=True)
                     except Exception:
-                        # Fallback: scan all loopback mics
                         for m in sc.all_microphones(include_loopback=True):
                             if m.isloopback:
                                 mic = m
@@ -654,37 +628,26 @@ class P2PwireApp(ctk.CTk):
                     if not mic:
                         raise RuntimeError("No system audio loopback device available. Ensure speakers are active.")
 
-                    self.log(f"Loopback device active: {mic.name}")
                     audio_queue = asyncio.Queue(maxsize=20)
                     capture_stop = threading.Event()
 
-                    # Audio capture thread
                     def capture_task():
-                        # Try 48000 Hz, fallback to 44100 Hz if hardware requires
-                        sample_rates = [48000, 44100]
-                        active_rate = 48000
-                        for rate in sample_rates:
-                            try:
-                                with mic.recorder(samplerate=rate, channels=2) as recorder:
-                                    active_rate = rate
-                                    while self.is_streaming and not capture_stop.is_set() and not self.stop_stream_event.is_set():
-                                        data = recorder.record(numframes=960)
-                                        # Downmix to mono
-                                        mono = np.mean(data, axis=1)
-                                        mono = np.clip(mono, -1.0, 1.0)
-                                        pcm16 = (mono * 32767).astype(np.int16).tobytes()
+                        try:
+                            with mic.recorder(samplerate=48000, channels=2) as recorder:
+                                while self.is_streaming and not capture_stop.is_set() and not self.stop_stream_event.is_set():
+                                    data = recorder.record(numframes=960)
+                                    mono = np.mean(data, axis=1)
+                                    mono = np.clip(mono, -1.0, 1.0)
+                                    pcm16 = (mono * 32767).astype(np.int16).tobytes()
 
-                                        if audio_queue.full():
-                                            try:
-                                                audio_queue.get_nowait()
-                                            except Exception:
-                                                pass
-
-                                        self.stream_loop.call_soon_threadsafe(audio_queue.put_nowait, pcm16)
-                                break
-                            except Exception as ex:
-                                if rate == sample_rates[-1]:
-                                    self.log(f"[CAPTURE FAULT] {ex}")
+                                    if audio_queue.full():
+                                        try:
+                                            audio_queue.get_nowait()
+                                        except Exception:
+                                            pass
+                                    self.stream_loop.call_soon_threadsafe(audio_queue.put_nowait, pcm16)
+                        except Exception as ex:
+                            self.log(f"[CAPTURE FAULT] {ex}")
 
                     c_thread = threading.Thread(target=capture_task, daemon=True)
                     c_thread.start()
@@ -694,10 +657,8 @@ class P2PwireApp(ctk.CTk):
                         try:
                             pcm16 = await asyncio.wait_for(audio_queue.get(), timeout=1.2)
                         except asyncio.TimeoutError:
-                            # Send keep-alive packet if quiet
                             pcm16 = bytes(960 * 2)
 
-                        # P2Pwire Audio Packet Header: [0xAB, 0x46, 0x01, SEQ_HI, SEQ_LO, 0, 0, 0]
                         h = bytearray(8)
                         h[0], h[1], h[2] = 0xAB, 0x46, 0x01
                         h[3], h[4] = (seq >> 8) & 0xFF, seq & 0xFF
@@ -707,11 +668,9 @@ class P2PwireApp(ctk.CTk):
                         self.after(0, self.update_waveform_from_pcm, pcm16)
 
                     capture_stop.set()
-
                 except Exception as ex:
                     if self.is_streaming and not self.stop_stream_event.is_set():
                         self.log(f"[CONNECTION NOTICE] {ex}")
-
                 finally:
                     if ws:
                         try:
@@ -722,17 +681,11 @@ class P2PwireApp(ctk.CTk):
                 if not self.is_streaming or self.stop_stream_event.is_set():
                     break
 
-                # Controlled backoff prevents reconnect storms
                 reconnect_attempts += 1
                 if reconnect_attempts > 6:
-                    self.log("Maximum connection attempts reached. Check Phone IP and Wi-Fi.")
                     break
 
-                backoff = 2
-                self.after(0, lambda a=reconnect_attempts: self.status_pill.configure(
-                    text=f"● RECONNECTING (#{a})...", text_color=CLR_ACCENT_AMBER
-                ))
-                await asyncio.sleep(backoff)
+                await asyncio.sleep(2)
 
             self.after(0, self.stop_streaming_cleanly)
 
@@ -744,7 +697,7 @@ class P2PwireApp(ctk.CTk):
             self.log(f"[FATAL STREAM ERROR] {e}")
 
     # =========================================================================
-    # TURBO FILE TRANSFER ENGINE (4x Parallel Sockets, Wire-Speed Sockets)
+    # TURBO FILE TRANSFER ENGINE (4x Parallel Sockets)
     # =========================================================================
     def select_file(self):
         file = filedialog.askopenfilename()
@@ -779,7 +732,6 @@ class P2PwireApp(ctk.CTk):
         self.log("Cancelling wire transfer...")
 
     def update_transfer_ui(self, progress, status_text, speed_mbps=0.0):
-        # Update Canvas Shimmer Bar
         bar_width = int(progress * 580)
         self.canvas_progress.coords(self.progress_rect, 0, 0, bar_width, 42)
         pct_label = f"⚡ {int(progress * 100)}% • {status_text}"
@@ -822,13 +774,11 @@ class P2PwireApp(ctk.CTk):
             self.log(f"Opening {num_channels}x Turbo Gigabit Sockets to {ip}:8082 for {file_name} ({file_size/(1024*1024):.1f} MB)...")
             self.after(0, lambda: self.update_transfer_ui(0.01, f"Connecting to {ip}:8082..."))
 
-            # 1. Connect Master Control Socket
             master_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             master_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             master_sock.settimeout(10.0)
             master_sock.connect((ip, 8082))
 
-            # Send OP_TURBO_INIT
             init_header = bytearray()
             init_header.extend(HBSP_MAGIC)
             init_header.append(HBSP_VERSION)
@@ -840,14 +790,12 @@ class P2PwireApp(ctk.CTk):
             init_header.extend(name_bytes)
             master_sock.sendall(init_header)
 
-            # Receive INIT_ACK (11 bytes)
             ack_data = self.recv_exact(master_sock, 11)
             if not ack_data.startswith(HBSP_MAGIC) or ack_data[5] != OP_TURBO_INIT_ACK or ack_data[10] != 0:
                 raise Exception(f"Turbo Handshake rejected by Phone: {ack_data}")
 
             self.log("Turbo Handshake accepted! Sockets engaged. Wire streaming active...")
 
-            # 2. Parallel Worker Channels
             part_size = file_size // num_channels
             thread_sent = [0] * num_channels
             worker_errors = []
@@ -864,7 +812,6 @@ class P2PwireApp(ctk.CTk):
                     wsock.settimeout(15.0)
                     wsock.connect((ip, 8082))
 
-                    # Send OP_TURBO_CHANNEL_JOIN
                     jbuf = bytearray()
                     jbuf.extend(HBSP_MAGIC)
                     jbuf.append(HBSP_VERSION)
@@ -875,12 +822,10 @@ class P2PwireApp(ctk.CTk):
                     jbuf.extend(struct.pack('>Q', length))
                     wsock.sendall(jbuf)
 
-                    # Receive JOIN_ACK (7 bytes)
                     jack = self.recv_exact(wsock, 7)
                     if jack[5] != OP_TURBO_CHANNEL_ACK or jack[6] != 0:
                         raise Exception(f"Channel {ch_idx} join failed")
 
-                    # High-throughput 128KB memoryview wire stream
                     buf = bytearray(CHUNK_SIZE)
                     mv = memoryview(buf)
                     sent = 0
@@ -915,7 +860,6 @@ class P2PwireApp(ctk.CTk):
                 threads.append(t)
                 t.start()
 
-            # Dynamic speed & progress monitoring
             while any(t.is_alive() for t in threads) and not self.hbsp_cancel_flag:
                 time.sleep(0.15)
                 now = time.time()
@@ -947,7 +891,6 @@ class P2PwireApp(ctk.CTk):
             if worker_errors:
                 raise Exception("; ".join(worker_errors))
 
-            # 3. Complete Handshake
             master_sock.sendall(bytes([OP_TURBO_COMPLETE]))
             cack = self.recv_exact(master_sock, 7)
             if cack[5] == OP_TURBO_COMPLETE_ACK and cack[6] == 0:
@@ -971,7 +914,7 @@ class P2PwireApp(ctk.CTk):
             self.after(0, lambda: self.btn_send_file.configure(state="normal"))
 
     # =========================================================================
-    # PC INCOMING HBSP RECEIVER (Receive files sent from Android)
+    # PC INCOMING HBSP RECEIVER
     # =========================================================================
     def run_pc_hbsp_receiver(self):
         try:
@@ -1006,12 +949,10 @@ class P2PwireApp(ctk.CTk):
                 os.makedirs(downloads_dir, exist_ok=True)
                 out_path = os.path.join(downloads_dir, file_name)
 
-                # Pre-allocate contiguous disk file
                 with open(out_path, 'wb') as f:
                     f.truncate(file_size)
                 self.active_turbo_sessions[session_id] = out_path
 
-                # Reply INIT_ACK
                 ack = bytearray()
                 ack.extend(HBSP_MAGIC)
                 ack.append(HBSP_VERSION)
@@ -1022,7 +963,6 @@ class P2PwireApp(ctk.CTk):
 
                 self.log(f"Incoming file from phone: {file_name} ({file_size/(1024*1024):.1f} MB)...")
 
-                # Wait for OP_TURBO_COMPLETE
                 comp_op = sock.recv(1)
                 self.active_turbo_sessions.pop(session_id, None)
 
