@@ -82,6 +82,7 @@ class P2PwireApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("P2Pwire Turbo Hub • Audio & 100+ MB/s Files")
+        # Compact, space-saving dimensions
         self.geometry("540x590")
         self.minsize(500, 540)
         self.configure(fg_color=CLR_BG)
@@ -100,6 +101,7 @@ class P2PwireApp(ctk.CTk):
         self.transfer_progress = ctk.StringVar(value="Ready for Transfer")
         self.active_turbo_sessions = {}
 
+        # Folders for Received and Sent files
         self.received_folder = os.path.join(os.path.expanduser("~"), "Downloads", "P2PwireTransfers")
         self.sent_folder = os.path.join(os.path.expanduser("~"), "Downloads", "P2PwireSent")
         os.makedirs(self.received_folder, exist_ok=True)
@@ -136,8 +138,10 @@ class P2PwireApp(ctk.CTk):
             else:
                 self.log(f"[NETWORK] PC is on Wi-Fi subnet {prefix}.0/24 (IP: {self.pc_ip}).")
                 self.log(f"💡 TIP: Check your Phone's P2Pwire screen for its IP ({prefix}.X) and enter it above.")
+                self.log(f"💡 Or, connect PC Wi-Fi to your Phone's Hotspot!")
 
         self.animate_loop()
+        # Launch automatic background subnet scan to discover the Phone immediately
         threading.Thread(target=self.detect_android_device, args=(True,), daemon=True).start()
         threading.Thread(target=self.run_pc_hbsp_receiver, daemon=True).start()
 
@@ -767,7 +771,6 @@ class P2PwireApp(ctk.CTk):
         if not HAS_SOUNDCARD:
             return None
 
-        # Method A: Search all microphones with isloopback == True
         try:
             mics = sc.all_microphones(include_loopback=True)
             spk = None
@@ -790,7 +793,6 @@ class P2PwireApp(ctk.CTk):
         except Exception as ex:
             self.log(f"[AUDIO] Device scan notice: {ex}")
 
-        # Method B: Lookup by default speaker ID (NOT name!)
         try:
             spk = sc.default_speaker()
             if spk and hasattr(spk, 'id') and spk.id:
@@ -798,7 +800,6 @@ class P2PwireApp(ctk.CTk):
         except Exception:
             pass
 
-        # Method C: Default microphone fallback
         try:
             return sc.default_microphone()
         except Exception:
@@ -1027,6 +1028,11 @@ class P2PwireApp(ctk.CTk):
 
             master_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             master_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            try:
+                master_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 * 1024 * 1024)
+                master_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)
+            except:
+                pass
             master_sock.settimeout(12.0)
             master_sock.connect((ip, 8082))
 
@@ -1050,7 +1056,7 @@ class P2PwireApp(ctk.CTk):
             bytes_since_calc = 0
             uploaded = 0
             speed = 0.0
-            buf_size = 512 * 1024
+            buf_size = 4 * 1024 * 1024  # 4MB high-throughput buffer
 
             with open(file_path, 'rb') as f:
                 while uploaded < file_size:
@@ -1107,6 +1113,11 @@ class P2PwireApp(ctk.CTk):
     def handle_incoming_connection_on_pc(self, sock, addr):
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 * 1024 * 1024)
+            except:
+                pass
             sock.settimeout(35.0)
             magic = self.recv_exact(sock, 4)
             if magic != HBSP_MAGIC:
@@ -1137,7 +1148,7 @@ class P2PwireApp(ctk.CTk):
                 bytes_since_calc = 0
                 received = 0
                 speed = 0.0
-                buf_size = 512 * 1024
+                buf_size = 4 * 1024 * 1024  # 4MB high-throughput buffer
 
                 with open(out_path, 'wb') as f:
                     while received < file_size:
@@ -1177,76 +1188,6 @@ class P2PwireApp(ctk.CTk):
                 self.after(0, self.refresh_file_lists)
                 self.is_transferring = False
 
-            elif op == OP_TURBO_INIT:
-                session_id = struct.unpack('>I', self.recv_exact(sock, 4))[0]
-                file_size = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
-                channels_cnt = sock.recv(1)[0]
-                name_len = struct.unpack('>H', self.recv_exact(sock, 2))[0]
-                file_name = self.recv_exact(sock, name_len).decode('utf-8')
-
-                out_path = os.path.join(self.received_folder, file_name)
-                with open(out_path, 'wb') as f:
-                    f.truncate(file_size)
-                self.active_turbo_sessions[session_id] = out_path
-
-                ack = bytearray()
-                ack.extend(HBSP_MAGIC)
-                ack.append(HBSP_VERSION)
-                ack.append(OP_TURBO_INIT_ACK)
-                ack.extend(struct.pack('>I', session_id))
-                ack.append(0)
-                sock.sendall(ack)
-
-                sock.recv(1)
-                self.active_turbo_sessions.pop(session_id, None)
-
-                cack = bytearray()
-                cack.extend(HBSP_MAGIC)
-                cack.append(HBSP_VERSION)
-                cack.append(OP_TURBO_COMPLETE_ACK)
-                cack.append(0)
-                sock.sendall(cack)
-                self.after(0, self.refresh_file_lists)
-
-            elif op == OP_TURBO_CHANNEL_JOIN:
-                session_id = struct.unpack('>I', self.recv_exact(sock, 4))[0]
-                channel_idx = sock.recv(1)[0]
-                start_offset = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
-                length = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
-
-                jack = bytearray()
-                jack.extend(HBSP_MAGIC)
-                jack.append(HBSP_VERSION)
-                jack.append(OP_TURBO_CHANNEL_ACK)
-                jack.append(0)
-                sock.sendall(jack)
-
-                target_path = self.active_turbo_sessions.get(session_id)
-                start_t = time.time()
-                while not target_path and (time.time() - start_t < 3.0):
-                    time.sleep(0.04)
-                    target_path = self.active_turbo_sessions.get(session_id)
-
-                if not target_path:
-                    recent = sorted([os.path.join(self.received_folder, f) for f in os.listdir(self.received_folder)], key=os.path.getmtime, reverse=True)
-                    if recent: target_path = recent[0]
-
-                if target_path:
-                    buf = bytearray(CHUNK_SIZE)
-                    mv = memoryview(buf)
-                    with open(target_path, 'r+b') as f:
-                        f.seek(start_offset)
-                        received = 0
-                        while received < length:
-                            to_read = min(CHUNK_SIZE, length - received)
-                            filled = 0
-                            while filled < to_read:
-                                n = sock.recv_into(mv[filled:to_read])
-                                if not n: break
-                                filled += n
-                            if filled == 0: break
-                            f.write(mv[:filled])
-                            received += filled
         except Exception as ex:
             self.log(f"[RECEIVE WARNING] {ex}")
         finally:
@@ -1255,7 +1196,6 @@ class P2PwireApp(ctk.CTk):
             except: pass
 
     def probe_ip(self, ip):
-        """Probes both File port (8082) and Audio port (8080) for active P2Pwire Android service."""
         for port in (8082, 8080):
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
