@@ -59,8 +59,13 @@ OP_TURBO_CHANNEL_ACK = 0x13
 OP_TURBO_COMPLETE = 0x14
 OP_TURBO_COMPLETE_ACK = 0x15
 
-CHUNK_SIZE = 128 * 1024
-DEFAULT_CHANNELS = 4
+OP_DIRECT_START = 0x20
+OP_DIRECT_ACK = 0x21
+OP_DIRECT_COMPLETE = 0x22
+OP_DIRECT_COMPLETE_ACK = 0x23
+
+CHUNK_SIZE = 256 * 1024
+DEFAULT_CHANNELS = 1
 
 CLR_BG = "#090D16"
 CLR_CARD = "#111827"
@@ -230,6 +235,23 @@ class P2PwireApp(ctk.CTk):
         )
         self.btn_toggle_stream.pack(fill="x", padx=12, pady=(8, 6))
 
+    def get_pc_local_ip(self):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            try:
+                for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                    ip = info[4][0]
+                    if not ip.startswith("127."):
+                        return ip
+            except Exception:
+                pass
+        return "127.0.0.1"
+
     def setup_files_tab_content(self):
         tab = self.tab_files
 
@@ -258,6 +280,18 @@ class P2PwireApp(ctk.CTk):
             font=ctk.CTkFont(size=12, weight="bold"),
             width=110
         ).pack(side="right")
+
+        file_info_frame = ctk.CTkFrame(tab, fg_color="#0F172A", corner_radius=8, border_width=1, border_color="#1E293B")
+        file_info_frame.pack(fill="x", padx=12, pady=(0, 6))
+
+        self.lbl_selected_file = ctk.CTkLabel(
+            file_info_frame,
+            text="📁 No file selected • Click 'Select File from PC' above",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=CLR_TEXT_MUTED,
+            anchor="w"
+        )
+        self.lbl_selected_file.pack(fill="x", padx=10, pady=6)
 
         self.canvas_progress = tk.Canvas(
             tab,
@@ -291,8 +325,8 @@ class P2PwireApp(ctk.CTk):
         )
         self.file_subtabview.pack(fill="both", expand=True, padx=12, pady=4)
 
-        self.subtab_received = self.file_subtabview.add("📥 Received")
-        self.subtab_sent = self.file_subtabview.add("📤 Sent")
+        self.subtab_received = self.file_subtabview.add("📥 Received (from Phone)")
+        self.subtab_sent = self.file_subtabview.add("📤 Sent (to Phone)")
 
         self.setup_received_list(self.subtab_received)
         self.setup_sent_list(self.subtab_sent)
@@ -436,6 +470,17 @@ class P2PwireApp(ctk.CTk):
         )
         self.btn_detect.pack(side="right")
 
+        pc_ip = self.get_pc_local_ip()
+        sub_info_row = ctk.CTkFrame(conn_frame, fg_color="transparent")
+        sub_info_row.pack(fill="x", padx=14, pady=(0, 8))
+        ctk.CTkLabel(
+            sub_info_row,
+            text=f"💻 This PC's IP: {pc_ip}   (Port 8082 for Files, Port 8080 for Sound)",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=CLR_ACCENT_CYAN,
+            anchor="w"
+        ).pack(side="left")
+
     def animate_loop(self):
         self.anim_tick += 1
         if not self.is_streaming:
@@ -513,55 +558,59 @@ class P2PwireApp(ctk.CTk):
     def run_audio_worker(self, ip):
         async def stream():
             uri = f"ws://{ip}:8080/ws/upload_audio"
-            while self.is_streaming and not self.stop_stream_event.is_set():
-                ws = None
-                try:
-                    ws = await websockets.connect(uri, ping_interval=20, ping_timeout=15, max_size=None)
-                    if not HAS_SOUNDCARD: break
-                    speaker = sc.default_speaker()
-                    mic = sc.get_microphone(id=speaker.name, include_loopback=True)
-                    audio_queue = asyncio.Queue(maxsize=20)
-                    capture_stop = threading.Event()
+            ws = None
+            try:
+                self.after(0, lambda: self.status_pill.configure(text=f"● CONNECTING ({ip})...", text_color=CLR_ACCENT_CYAN))
+                ws = await websockets.connect(uri, ping_interval=20, ping_timeout=15, max_size=None)
+                self.after(0, lambda: self.status_pill.configure(text="● STREAMING LIVE", text_color=CLR_ACCENT_GREEN))
 
-                    def capture_task():
-                        try:
-                            with mic.recorder(samplerate=48000, channels=2) as recorder:
-                                while self.is_streaming and not capture_stop.is_set():
-                                    data = recorder.record(numframes=960)
-                                    mono = np.mean(data, axis=1)
-                                    mono = np.clip(mono, -1.0, 1.0)
-                                    pcm16 = (mono * 32767).astype(np.int16).tobytes()
-                                    if audio_queue.full():
-                                        try: audio_queue.get_nowait()
-                                        except: pass
-                                    self.stream_loop.call_soon_threadsafe(audio_queue.put_nowait, pcm16)
-                        except: pass
+                if not HAS_SOUNDCARD:
+                    raise RuntimeError("soundcard library not found. Run: pip install soundcard")
 
-                    threading.Thread(target=capture_task, daemon=True).start()
+                speaker = sc.default_speaker()
+                mic = sc.get_microphone(id=speaker.name, include_loopback=True)
+                audio_queue = asyncio.Queue(maxsize=20)
+                capture_stop = threading.Event()
 
-                    seq = 0
-                    while self.is_streaming and not self.stop_stream_event.is_set():
-                        try:
-                            pcm16 = await asyncio.wait_for(audio_queue.get(), timeout=1.2)
-                        except asyncio.TimeoutError:
-                            pcm16 = bytes(960 * 2)
+                def capture_task():
+                    try:
+                        with mic.recorder(samplerate=48000, channels=2) as recorder:
+                            while self.is_streaming and not capture_stop.is_set():
+                                data = recorder.record(numframes=960)
+                                mono = np.mean(data, axis=1)
+                                mono = np.clip(mono, -1.0, 1.0)
+                                pcm16 = (mono * 32767).astype(np.int16).tobytes()
+                                if audio_queue.full():
+                                    try: audio_queue.get_nowait()
+                                    except: pass
+                                self.stream_loop.call_soon_threadsafe(audio_queue.put_nowait, pcm16)
+                    except Exception as ce:
+                        pass
 
-                        h = bytearray(8)
-                        h[0], h[1], h[2] = 0xAB, 0x46, 0x01
-                        h[3], h[4] = (seq >> 8) & 0xFF, seq & 0xFF
-                        seq = (seq + 1) & 0xFFFF
+                threading.Thread(target=capture_task, daemon=True).start()
 
-                        await ws.send(bytes(h) + pcm16)
-                        self.after(0, self.update_waveform_from_pcm, pcm16)
-                    capture_stop.set()
-                except:
-                    pass
-                finally:
-                    if ws:
-                        try: await ws.close()
-                        except: pass
-                if not self.is_streaming or self.stop_stream_event.is_set(): break
-                await asyncio.sleep(2)
+                seq = 0
+                while self.is_streaming and not self.stop_stream_event.is_set():
+                    try:
+                        pcm16 = await asyncio.wait_for(audio_queue.get(), timeout=1.2)
+                    except asyncio.TimeoutError:
+                        pcm16 = bytes(960 * 2)
+
+                    h = bytearray(8)
+                    h[0], h[1], h[2] = 0xAB, 0x46, 0x01
+                    h[3], h[4] = (seq >> 8) & 0xFF, seq & 0xFF
+                    seq = (seq + 1) & 0xFFFF
+
+                    await ws.send(bytes(h) + pcm16)
+                    self.after(0, self.update_waveform_from_pcm, pcm16)
+                capture_stop.set()
+            except Exception as e:
+                err_msg = str(e)
+                self.after(0, lambda: self.status_pill.configure(text=f"● DISCONNECTED (Check IP)", text_color="#EF4444"))
+            finally:
+                if ws:
+                    try: await ws.close()
+                    except: pass
             self.after(0, self.stop_streaming_cleanly)
 
         self.stream_loop = asyncio.new_event_loop()
@@ -578,6 +627,11 @@ class P2PwireApp(ctk.CTk):
             name = os.path.basename(file)
             self.selected_file_path.set(f"{name} ({size_mb:.1f} MB)")
             self._current_file_path = file
+            if hasattr(self, 'lbl_selected_file'):
+                self.lbl_selected_file.configure(
+                    text=f"✓ Selected: {name} ({size_mb:.1f} MB) • Ready to Send to Phone",
+                    text_color=CLR_ACCENT_CYAN
+                )
 
     def update_transfer_ui(self, progress, status_text, speed_mbps=0.0):
         bar_width = int(progress * 580)
@@ -597,7 +651,16 @@ class P2PwireApp(ctk.CTk):
     def send_file_hbsp(self):
         ip = self.ip_entry.get().strip()
         file_path = getattr(self, '_current_file_path', None)
-        if not ip or not file_path or not os.path.exists(file_path): return
+        if not file_path or not os.path.exists(file_path):
+            if hasattr(self, 'lbl_selected_file'):
+                self.lbl_selected_file.configure(
+                    text="⚠️ Please click 'Select File from PC' first!",
+                    text_color=CLR_ACCENT_AMBER
+                )
+            return
+        if not ip:
+            self.update_transfer_ui(0.0, "Error: Android Phone IP is empty!", 0.0)
+            return
         threading.Thread(target=self.perform_hbsp_turbo_upload, args=(ip, file_path), daemon=True).start()
 
     def perform_hbsp_turbo_upload(self, ip, file_path):
@@ -610,97 +673,64 @@ class P2PwireApp(ctk.CTk):
 
             try:
                 dest_sent = os.path.join(self.sent_folder, file_name)
-                with open(file_path, 'rb') as src, open(dest_sent, 'wb') as dst:
-                    dst.write(src.read())
+                if not os.path.exists(dest_sent) or os.path.abspath(file_path) != os.path.abspath(dest_sent):
+                    import shutil
+                    shutil.copy2(file_path, dest_sent)
                 self.after(0, self.refresh_file_lists)
             except: pass
 
-            num_channels = DEFAULT_CHANNELS
-            session_id = random.randint(100000, 999999)
+            self.after(0, lambda: self.update_transfer_ui(0.01, f"Connecting to {ip}:8082...", 0.0))
 
             master_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             master_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            master_sock.settimeout(12.0)
             master_sock.connect((ip, 8082))
 
+            # Packet: [MAGIC: 4][VERSION: 1][OP_DIRECT_START: 1][FILE_SIZE: 8][NAME_LEN: 2][NAME_BYTES: N]
             init_header = bytearray()
             init_header.extend(HBSP_MAGIC)
             init_header.append(HBSP_VERSION)
-            init_header.append(OP_TURBO_INIT)
-            init_header.extend(struct.pack('>I', session_id))
+            init_header.append(OP_DIRECT_START)
             init_header.extend(struct.pack('>Q', file_size))
-            init_header.append(num_channels)
             init_header.extend(struct.pack('>H', len(name_bytes)))
             init_header.extend(name_bytes)
             master_sock.sendall(init_header)
 
-            ack_data = self.recv_exact(master_sock, 11)
-            if not ack_data.startswith(HBSP_MAGIC) or ack_data[5] != OP_TURBO_INIT_ACK:
-                raise Exception("Handshake rejected")
-
-            part_size = file_size // num_channels
-            thread_sent = [0] * num_channels
-
-            def worker_channel(ch_idx, start_offset, length):
-                wsock = None
-                try:
-                    wsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    wsock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                    wsock.connect((ip, 8082))
-
-                    jbuf = bytearray()
-                    jbuf.extend(HBSP_MAGIC)
-                    jbuf.append(HBSP_VERSION)
-                    jbuf.append(OP_TURBO_CHANNEL_JOIN)
-                    jbuf.extend(struct.pack('>I', session_id))
-                    jbuf.append(ch_idx)
-                    jbuf.extend(struct.pack('>Q', start_offset))
-                    jbuf.extend(struct.pack('>Q', length))
-                    wsock.sendall(jbuf)
-
-                    self.recv_exact(wsock, 7)
-
-                    buf = bytearray(CHUNK_SIZE)
-                    mv = memoryview(buf)
-                    sent = 0
-                    with open(file_path, 'rb') as f:
-                        f.seek(start_offset)
-                        while sent < length:
-                            to_read = min(CHUNK_SIZE, length - sent)
-                            n = f.readinto(mv[:to_read])
-                            if not n: break
-                            wsock.sendall(mv[:n])
-                            sent += n
-                            thread_sent[ch_idx] = sent
-                except: pass
-                finally:
-                    if wsock:
-                        try: wsock.close()
-                        except: pass
+            ack_data = self.recv_exact(master_sock, 7)
+            if not ack_data.startswith(HBSP_MAGIC) or ack_data[5] != OP_DIRECT_ACK or ack_data[6] != 0:
+                raise Exception("Phone rejected transfer handshake")
 
             start_time = time.time()
-            threads = []
-            for ch in range(num_channels):
-                start_off = ch * part_size
-                ch_len = (file_size - start_off) if ch == (num_channels - 1) else part_size
-                t = threading.Thread(target=worker_channel, args=(ch, start_off, ch_len), daemon=True)
-                threads.append(t)
-                t.start()
+            last_calc_time = start_time
+            bytes_since_calc = 0
+            uploaded = 0
+            speed = 0.0
+            buf_size = 512 * 1024
 
-            while any(t.is_alive() for t in threads):
-                time.sleep(0.15)
-                cur_up = sum(thread_sent)
-                pct = cur_up / file_size if file_size > 0 else 0
-                elapsed = max(0.1, time.time() - start_time)
-                speed = (cur_up / (1024 * 1024)) / elapsed
-                self.after(0, lambda p=pct, s="Transferring...", sp=speed: self.update_transfer_ui(p, s, sp))
+            with open(file_path, 'rb') as f:
+                while uploaded < file_size:
+                    chunk = f.read(buf_size)
+                    if not chunk: break
+                    master_sock.sendall(chunk)
+                    uploaded += len(chunk)
+                    bytes_since_calc += len(chunk)
 
-            for t in threads: t.join(timeout=2.0)
+                    now = time.time()
+                    diff = now - last_calc_time
+                    if diff >= 0.2:
+                        speed = (bytes_since_calc / (1024 * 1024)) / diff
+                        pct = uploaded / file_size if file_size > 0 else 0
+                        self.after(0, lambda p=pct, s="Transferring...", sp=speed: self.update_transfer_ui(p, s, sp))
+                        last_calc_time = now
+                        bytes_since_calc = 0
 
-            master_sock.sendall(bytes([OP_TURBO_COMPLETE]))
-            self.recv_exact(master_sock, 7)
+            # Send OP_DIRECT_COMPLETE
+            master_sock.sendall(bytes([OP_DIRECT_COMPLETE]))
+            comp_ack = self.recv_exact(master_sock, 7)
+
             total_time = max(0.1, time.time() - start_time)
             avg_speed = (file_size / (1024 * 1024)) / total_time
-            self.after(0, lambda: self.update_transfer_ui(1.0, "Complete!", avg_speed))
+            self.after(0, lambda: self.update_transfer_ui(1.0, f"Complete in {total_time:.1f}s!", avg_speed))
             self.after(0, self.refresh_file_lists)
         except Exception as e:
             self.after(0, lambda: self.update_transfer_ui(0.0, f"Error: {e}", 0.0))
@@ -725,6 +755,7 @@ class P2PwireApp(ctk.CTk):
     def handle_incoming_connection_on_pc(self, sock, addr):
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.settimeout(35.0)
             magic = self.recv_exact(sock, 4)
             if magic != HBSP_MAGIC:
                 sock.close()
@@ -732,7 +763,64 @@ class P2PwireApp(ctk.CTk):
             ver = sock.recv(1)[0]
             op = sock.recv(1)[0]
 
-            if op == OP_TURBO_INIT:
+            if op == OP_DIRECT_START:
+                file_size = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
+                name_len = struct.unpack('>H', self.recv_exact(sock, 2))[0]
+                file_name = self.recv_exact(sock, name_len).decode('utf-8')
+
+                out_path = os.path.join(self.received_folder, file_name)
+
+                # Send OP_DIRECT_ACK: [MAGIC: 4][VER: 1][OP_DIRECT_ACK: 1][STATUS: 0]
+                ack = bytearray()
+                ack.extend(HBSP_MAGIC)
+                ack.append(HBSP_VERSION)
+                ack.append(OP_DIRECT_ACK)
+                ack.append(0)
+                sock.sendall(ack)
+
+                self.is_transferring = True
+                start_time = time.time()
+                last_calc_time = start_time
+                bytes_since_calc = 0
+                received = 0
+                speed = 0.0
+                buf_size = 512 * 1024
+
+                with open(out_path, 'wb') as f:
+                    while received < file_size:
+                        to_read = min(buf_size, file_size - received)
+                        chunk = sock.recv(to_read)
+                        if not chunk: break
+                        f.write(chunk)
+                        received += len(chunk)
+                        bytes_since_calc += len(chunk)
+
+                        now = time.time()
+                        diff = now - last_calc_time
+                        if diff >= 0.2:
+                            speed = (bytes_since_calc / (1024 * 1024)) / diff
+                            pct = received / file_size if file_size > 0 else 0
+                            self.after(0, lambda p=pct, s="Receiving from Phone...", sp=speed: self.update_transfer_ui(p, s, sp))
+                            last_calc_time = now
+                            bytes_since_calc = 0
+
+                # Read OP_DIRECT_COMPLETE
+                comp_op = sock.recv(1)
+
+                cack = bytearray()
+                cack.extend(HBSP_MAGIC)
+                cack.append(HBSP_VERSION)
+                cack.append(OP_DIRECT_COMPLETE_ACK)
+                cack.append(0)
+                sock.sendall(cack)
+
+                total_time = max(0.1, time.time() - start_time)
+                avg_speed = (file_size / (1024 * 1024)) / total_time
+                self.after(0, lambda: self.update_transfer_ui(1.0, f"Complete in {total_time:.1f}s!", avg_speed))
+                self.after(0, self.refresh_file_lists)
+                self.is_transferring = False
+
+            elif op == OP_TURBO_INIT:
                 session_id = struct.unpack('>I', self.recv_exact(sock, 4))[0]
                 file_size = struct.unpack('>Q', self.recv_exact(sock, 8))[0]
                 channels_cnt = sock.recv(1)[0]
@@ -805,6 +893,7 @@ class P2PwireApp(ctk.CTk):
         except:
             pass
         finally:
+            self.is_transferring = False
             try: sock.close()
             except: pass
 
