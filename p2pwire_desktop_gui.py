@@ -136,7 +136,6 @@ class P2PwireApp(ctk.CTk):
             else:
                 self.log(f"[NETWORK] PC is on Wi-Fi subnet {prefix}.0/24 (IP: {self.pc_ip}).")
                 self.log(f"💡 TIP: Check your Phone's P2Pwire screen for its IP ({prefix}.X) and enter it above.")
-                self.log(f"💡 Or, connect PC Wi-Fi to your Phone's Hotspot!")
 
         self.animate_loop()
         threading.Thread(target=self.detect_android_device, args=(True,), daemon=True).start()
@@ -339,33 +338,35 @@ class P2PwireApp(ctk.CTk):
 
         ctk.CTkButton(
             top_action_row,
-            text="📁 Select File",
+            text="📁 Pick File",
             command=self.select_file,
-            height=32,
+            height=34,
             corner_radius=6,
             fg_color="#1E293B",
             hover_color="#334155",
-            font=ctk.CTkFont(size=11, weight="bold")
-        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+            font=ctk.CTkFont(size=11, weight="bold"),
+            width=90
+        ).pack(side="left", padx=(0, 6))
 
-        ctk.CTkButton(
+        # True 1-Click Fast Send Button
+        self.btn_turbo_send = ctk.CTkButton(
             top_action_row,
-            text="🚀 Send File",
+            text="🚀 1-Click Fast Send to Phone (HBSP)",
             command=self.send_file_hbsp,
-            height=32,
+            height=34,
             corner_radius=6,
             fg_color=CLR_ACCENT_GREEN,
             hover_color="#059669",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            width=100
-        ).pack(side="right")
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.btn_turbo_send.pack(side="left", fill="x", expand=True)
 
         file_info_frame = ctk.CTkFrame(tab, fg_color="#0F172A", corner_radius=6, border_width=1, border_color="#1E293B")
         file_info_frame.pack(fill="x", padx=8, pady=(2, 4))
 
         self.lbl_selected_file = ctk.CTkLabel(
             file_info_frame,
-            text="📁 No file selected • Click 'Select File' above",
+            text="📁 Ready • Click '1-Click Fast Send' to transfer any file instantly",
             font=ctk.CTkFont(size=10, weight="bold"),
             text_color=CLR_TEXT_MUTED,
             anchor="w"
@@ -761,6 +762,50 @@ class P2PwireApp(ctk.CTk):
         except Exception:
             pass
 
+    def get_loopback_device(self):
+        """Discovers Windows WASAPI Loopback device safely without triggering 0x80070490."""
+        if not HAS_SOUNDCARD:
+            return None
+
+        # Method A: Search all microphones with isloopback == True
+        try:
+            mics = sc.all_microphones(include_loopback=True)
+            spk = None
+            try:
+                spk = sc.default_speaker()
+            except Exception:
+                pass
+
+            if spk:
+                for m in mics:
+                    if getattr(m, 'isloopback', False):
+                        if getattr(m, 'name', '') == getattr(spk, 'name', ''):
+                            return m
+                        if hasattr(spk, 'id') and getattr(spk, 'id', '') and getattr(spk, 'id', '') in getattr(m, 'id', ''):
+                            return m
+
+            for m in mics:
+                if getattr(m, 'isloopback', False):
+                    return m
+        except Exception as ex:
+            self.log(f"[AUDIO] Device scan notice: {ex}")
+
+        # Method B: Lookup by default speaker ID (NOT name!)
+        try:
+            spk = sc.default_speaker()
+            if spk and hasattr(spk, 'id') and spk.id:
+                return sc.get_microphone(id=spk.id, include_loopback=True)
+        except Exception:
+            pass
+
+        # Method C: Default microphone fallback
+        try:
+            return sc.default_microphone()
+        except Exception:
+            pass
+
+        return None
+
     def toggle_stream(self):
         if not self.is_streaming:
             ip = self.ip_entry.get().strip()
@@ -802,25 +847,50 @@ class P2PwireApp(ctk.CTk):
                 if not HAS_SOUNDCARD:
                     raise RuntimeError("soundcard library not found. Run: pip install soundcard")
 
-                speaker = sc.default_speaker()
-                mic = sc.get_microphone(id=speaker.name, include_loopback=True)
+                mic = self.get_loopback_device()
+                if mic:
+                    self.log(f"[AUDIO] Capturing from loopback device: {getattr(mic, 'name', 'Speaker Loopback')}")
+                else:
+                    self.log("⚠️ [AUDIO NOTICE] Direct loopback device not found; using fallback audio streamer.")
+
                 audio_queue = asyncio.Queue(maxsize=20)
                 capture_stop = threading.Event()
 
                 def capture_task():
                     try:
-                        with mic.recorder(samplerate=48000, channels=2) as recorder:
+                        if mic:
+                            with mic.recorder(samplerate=48000, channels=2) as recorder:
+                                while self.is_streaming and not capture_stop.is_set():
+                                    try:
+                                        data = recorder.record(numframes=960)
+                                        mono = np.mean(data, axis=1)
+                                        mono = np.clip(mono, -1.0, 1.0)
+                                        pcm16 = (mono * 32767).astype(np.int16).tobytes()
+                                    except Exception:
+                                        pcm16 = bytes(960 * 2)
+
+                                    if audio_queue.full():
+                                        try: audio_queue.get_nowait()
+                                        except: pass
+                                    self.stream_loop.call_soon_threadsafe(audio_queue.put_nowait, pcm16)
+                        else:
                             while self.is_streaming and not capture_stop.is_set():
-                                data = recorder.record(numframes=960)
-                                mono = np.mean(data, axis=1)
-                                mono = np.clip(mono, -1.0, 1.0)
-                                pcm16 = (mono * 32767).astype(np.int16).tobytes()
+                                time.sleep(0.02)
+                                pcm16 = bytes(960 * 2)
                                 if audio_queue.full():
                                     try: audio_queue.get_nowait()
                                     except: pass
                                 self.stream_loop.call_soon_threadsafe(audio_queue.put_nowait, pcm16)
                     except Exception as ce:
-                        self.log(f"[CAPTURE WARNING] {ce}")
+                        self.log(f"[AUDIO NOTICE] PC Audio Endpoint message: {ce}")
+                        self.log("💡 Tip: Start playing any music/video on PC so Windows activates speaker loopback.")
+                        while self.is_streaming and not capture_stop.is_set():
+                            time.sleep(0.02)
+                            pcm16 = bytes(960 * 2)
+                            if audio_queue.full():
+                                try: audio_queue.get_nowait()
+                                except: pass
+                            self.stream_loop.call_soon_threadsafe(audio_queue.put_nowait, pcm16)
 
                 threading.Thread(target=capture_task, daemon=True).start()
 
@@ -911,19 +981,28 @@ class P2PwireApp(ctk.CTk):
         return bytes(data)
 
     def send_file_hbsp(self):
+        """True 1-Click Fast Send: If no file is chosen, prompts immediately and starts gigabit transfer!"""
         ip = self.ip_entry.get().strip()
-        file_path = getattr(self, '_current_file_path', None)
-        if not file_path or not os.path.exists(file_path):
-            self.lbl_selected_file.configure(
-                text="⚠️ Please click 'Select File' first!",
-                text_color=CLR_ACCENT_AMBER
-            )
-            self.log("[FILE ERROR] No file selected to send.")
-            return
         if not ip or ip.endswith("."):
-            self.log("[FILE ERROR] Phone IP is incomplete. Please enter a valid Phone IP.")
+            self.log("[FILE ERROR] Phone IP is incomplete. Please enter a valid Phone IP or click 🔍 Auto.")
             self.update_transfer_ui(0.0, "Error: Android Phone IP is empty!", 0.0, mode="error")
             return
+
+        file_path = getattr(self, '_current_file_path', None)
+        if not file_path or not os.path.exists(file_path):
+            file_path = filedialog.askopenfilename()
+            if not file_path:
+                return
+            size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            name = os.path.basename(file_path)
+            self.selected_file_path.set(f"{name} ({size_mb:.1f} MB)")
+            self._current_file_path = file_path
+            self.lbl_selected_file.configure(
+                text=f"✓ Selected: {name} ({size_mb:.1f} MB) • Sending...",
+                text_color=CLR_ACCENT_CYAN
+            )
+            self.log(f"[FILE] 1-Click Selected & Sending: {name} ({size_mb:.1f} MB)")
+
         threading.Thread(target=self.perform_hbsp_turbo_upload, args=(ip, file_path), daemon=True).start()
 
     def perform_hbsp_turbo_upload(self, ip, file_path):
@@ -1002,6 +1081,7 @@ class P2PwireApp(ctk.CTk):
             self.log(f"[FILE SUCCESS] ✓ Sent {file_name} ({total_mb:.1f} MB) in {total_time:.1f}s (Avg: {avg_speed:.1f} MB/s)!")
             self.after(0, lambda: self.update_transfer_ui(1.0, f"Complete in {total_time:.1f}s!", avg_speed, mode="success"))
             self.after(0, self.refresh_file_lists)
+            self._current_file_path = None
         except Exception as e:
             self.log(f"[TRANSFER ERROR] {e}")
             self.after(0, lambda: self.update_transfer_ui(0.0, f"Error: {e}", 0.0, mode="error"))
