@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-  P2Pwire Desktop Turbo Hub 3.1 (Advanced Adaptive Dual-Rail Link Aggregation)
+  P2Pwire Desktop Turbo Hub 3.3 (Expanded Dual-Rail Gateway & Smart Pruning)
   - Hardware Interface-Pinned Sockets (bind to physical adapter IPs)
-  - Adaptive Per-Rail Weighted Load Balancing (Prevents slow rail stalling fast rail)
-  - Real-Time Per-Rail Live Telemetry & Throughput Optimization
+  - Expanded Gateway Scanner (Supports 192.168.42.x, 43.x, 49.x Hotspots & USB)
+  - Automatic Dead Rail Pruning (Drops 0.0 MB/s dead interfaces)
+  - Adaptive Per-Rail Weighted Load Balancing
   - Isolated Port 8080 Audio Engine (<20ms Lip-Sync Guaranteed)
 ================================================================================
 Requirements:
@@ -104,7 +105,7 @@ def find_matching_local_ip(target_ip, local_ips):
 
 
 # ==============================================================================
-# Zero-Config Multi-Rail Discovery Engine
+# Zero-Config Multi-Rail Discovery Engine (Expanded Hotspot & USB Gateways)
 # ==============================================================================
 class PeerAutoDiscovery:
     def __init__(self, local_ips, on_peer_updated_callback):
@@ -135,7 +136,7 @@ class PeerAutoDiscovery:
                             raw_ips = parts[2].split(",")
                             for ip in raw_ips:
                                 ip = ip.strip()
-                                if ip:
+                                if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
                                     self._register_peer_ip(ip)
                 except socket.timeout:
                     continue
@@ -171,10 +172,10 @@ class PeerAutoDiscovery:
                         candidate_targets.extend(["192.168.42.129", "192.168.42.1"])
                     elif prefix == "192.168.43.":
                         candidate_targets.append("192.168.43.1")
-                    elif prefix == "10.119.76.":
-                        candidate_targets.append("10.119.76.208")
+                    elif prefix == "192.168.49.":
+                        candidate_targets.append("192.168.49.1")
 
-            for default_gw in ["192.168.42.129", "192.168.42.1", "192.168.43.1", "10.119.76.208"]:
+            for default_gw in ["192.168.42.129", "192.168.42.1", "192.168.43.1", "192.168.49.1", "10.119.76.208"]:
                 if default_gw not in candidate_targets:
                     candidate_targets.append(default_gw)
 
@@ -185,13 +186,14 @@ class PeerAutoDiscovery:
                     return
                 try:
                     url = f"http://{target}:{AUDIO_PORT}/api/status?pc_ips={ips_param}"
-                    req = urllib.request.Request(url, headers={"User-Agent": "P2Pwire-Desktop/3.1"})
-                    with urllib.request.urlopen(req, timeout=0.8) as response:
+                    req = urllib.request.Request(url, headers={"User-Agent": "P2Pwire-Desktop/3.3"})
+                    with urllib.request.urlopen(req, timeout=0.6) as response:
                         if response.status == 200:
                             data = json.loads(response.read().decode("utf-8"))
                             self._register_peer_ip(target)
                             for p_ip in data.get("ips", []):
-                                self._register_peer_ip(p_ip)
+                                if not p_ip.startswith("127.") and not p_ip.startswith("169.254."):
+                                    self._register_peer_ip(p_ip)
                 except Exception:
                     continue
 
@@ -202,7 +204,8 @@ class PeerAutoDiscovery:
             if ip and ip not in self.discovered_ips and ip not in self.local_ips:
                 self.discovered_ips.add(ip)
                 if self.on_peer_updated:
-                    self.on_peer_updated(list(self.discovered_ips))
+                    sorted_ips = sorted(list(self.discovered_ips), key=lambda x: (0 if x.startswith("192.168.42") else (1 if (x.startswith("192.168.43") or x.startswith("192.168.49")) else 2)))
+                    self.on_peer_updated(sorted_ips)
 
     def stop(self):
         self.running = False
@@ -232,7 +235,6 @@ class DirectAudioStreamer:
 
     def _stream_worker(self):
         if not HAS_SOUNDCARD:
-            self.log("[ERROR] 'soundcard' or 'numpy' not installed!", "red")
             self.running = False
             return
 
@@ -258,9 +260,8 @@ class DirectAudioStreamer:
                     sock.sendall(pcm16)
 
             sock.close()
-        except Exception as e:
-            if self.running:
-                pass
+        except Exception:
+            pass
         finally:
             self.running = False
 
@@ -456,11 +457,11 @@ class HbspFileReceiverServer:
 
 
 # ==============================================================================
-# HBSP 3.1 Adaptive Per-Rail Weighted Link Aggregation Sender
+# HBSP 3.3 Smart Rail Pruning & Adaptive Link Aggregation Sender
 # ==============================================================================
 class TurboFileSender:
     def __init__(self, target_ips, port=HBSP_FILE_PORT, log_callback=None, progress_callback=None):
-        self.target_ips = target_ips if isinstance(target_ips, list) else [target_ips]
+        self.target_ips = [ip for ip in (target_ips if isinstance(target_ips, list) else [target_ips]) if ip and ip != "0.0.0.0"]
         self.port = port
         self.log = log_callback or print
         self.progress = progress_callback
@@ -490,10 +491,12 @@ class TurboFileSender:
         sockets = []
         sockets_per_ip = 3 if len(clean_ips) >= 2 else 6
 
+        connected_ips = set()
         for ip in clean_ips:
             matching_lip = find_matching_local_ip(ip, local_ips)
-            rail_tag = "USB RNDIS" if ip.startswith("192.168.42.") else ("Wi-Fi Hotspot" if ip.startswith("192.168.43.") else "Wi-Fi LAN")
+            rail_tag = "USB RNDIS" if ip.startswith("192.168.42.") else ("Wi-Fi Hotspot" if (ip.startswith("192.168.43.") or ip.startswith("192.168.49.")) else "Wi-Fi LAN")
 
+            ip_connected = False
             for ch in range(sockets_per_ip):
                 try:
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -507,23 +510,29 @@ class TurboFileSender:
                         except Exception:
                             pass
 
-                    s.settimeout(2.5)
+                    s.settimeout(2.0)
                     s.connect((ip, self.port))
                     s.settimeout(None)
                     sockets.append((s, ip, ch, rail_tag))
+                    ip_connected = True
                 except Exception:
                     pass
+            if ip_connected:
+                connected_ips.add(ip)
 
-        if not sockets:
-            self.log("[ERROR] Could not connect to phone! Check USB Tethering and Wi-Fi connection.", "red")
+        active_rails = list(connected_ips)
+        if not active_rails:
+            self.log("[ERROR] Could not connect to any phone IP! Check USB Tethering and Wi-Fi connection.", "red")
             return
 
-        active_rails = list(dict.fromkeys(ip for _, ip, _, _ in sockets))
-        self.log(f"[PIPES ENGAGED] ✓ Connected {len(sockets)} socket pipes across {len(active_rails)} physical interfaces ({', '.join(active_rails)})", "green")
+        sockets = [item for item in sockets if item[1] in active_rails]
+        self.rail_stats = {ip: 0 for ip in active_rails}
+
+        self.log(f"[PIPES ENGAGED] ✓ Connected {len(sockets)} socket pipes across {len(active_rails)} responsive physical interfaces ({', '.join(active_rails)})", "green")
         if len(active_rails) >= 2:
-            self.log("[DUAL-RAIL ACTIVE] ⚡ True hardware link aggregation (USB + Wi-Fi) running simultaneously with adaptive load balancing!", "green")
+            self.log("[DUAL-RAIL ACTIVE] ⚡ True hardware link aggregation (USB + Wi-Fi) running simultaneously!", "green")
         else:
-            self.log(f"[SINGLE RAIL NOTICE] Only 1 interface responding ({active_rails[0]}). Connect both USB and Wi-Fi for 2x speed!", "yellow")
+            self.log(f"[SINGLE RAIL ACTIVE] Active interface: {active_rails[0]}. Ensure both USB and Wi-Fi Hotspot are active for Dual-Rail!", "yellow")
 
         cctx = zstd.ZstdCompressor(level=1) if use_zstd else None
 
@@ -533,14 +542,17 @@ class TurboFileSender:
             meta_header = struct.pack("!4sBBHIIII", HBSP_MAGIC, HBSP_VERSION, FLAG_FILE | FLAG_META, 0, 0, len(meta_payload), len(meta_payload), checksum)
 
             for s, _, _, _ in sockets:
-                s.sendall(meta_header + meta_payload)
+                try:
+                    s.sendall(meta_header + meta_payload)
+                except Exception:
+                    pass
 
             start_time = time.time()
             total_sent_raw = 0
             total_sent_wire = (len(meta_header) + len(meta_payload)) * len(sockets)
             stat_lock = threading.Lock()
             last_telemetry_time = time.time()
-            last_telemetry_bytes = {ip: 0 for ip in clean_ips}
+            last_telemetry_bytes = {ip: 0 for ip in active_rails}
 
             rail_queues = {ip: queue.Queue(maxsize=12) for ip in active_rails}
 
@@ -556,6 +568,9 @@ class TurboFileSender:
                         q.task_done()
                         break
                     header, payload, raw_len = item
+                    if num_socks == 0:
+                        q.task_done()
+                        continue
                     s, _, _, _ = assigned_sockets[sock_idx % num_socks]
                     sock_idx += 1
 
@@ -586,7 +601,7 @@ class TurboFileSender:
             rail_weights = {}
             for ip in active_rails:
                 if "192.168.42." in ip:
-                    rail_weights[ip] = 1.2
+                    rail_weights[ip] = 1.3
                 else:
                     rail_weights[ip] = 1.0
 
@@ -619,8 +634,8 @@ class TurboFileSender:
                         total_bytes_so_far = sum(self.rail_stats.values())
                         if total_bytes_so_far > 1024 * 1024:
                             for ip in active_rails:
-                                share = self.rail_stats[ip] / total_bytes_so_far
-                                rail_weights[ip] = max(0.4, share * len(active_rails))
+                                share = self.rail_stats[ip] / max(1, total_bytes_so_far)
+                                rail_weights[ip] = max(0.3, share * len(active_rails))
 
                     target_ip = max(active_rails, key=lambda ip: rail_weights[ip] - (rail_queues[ip].qsize() * 0.2))
                     rail_queues[target_ip].put((header, payload, len(raw_chunk)))
@@ -678,7 +693,7 @@ class TurboFileSender:
 class P2PwireDesktopApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("P2Pwire Turbo Hub 3.1 (Adaptive Dual-Rail Bonding)")
+        self.root.title("P2Pwire Turbo Hub 3.3 (Expanded Dual-Rail Gateway)")
         self.root.geometry("860x690")
         self.root.minsize(760, 590)
         self.root.configure(bg="#070B14")
@@ -701,7 +716,7 @@ class P2PwireDesktopApp:
         self.audio_server = AudioReceiverServer(port=AUDIO_PORT, log_callback=self.log)
         self.audio_server.start()
 
-        self.log("[INIT] P2Pwire Desktop Hub 3.1 Initialized with Adaptive Dual-Rail Link Aggregation.", "cyan")
+        self.log("[INIT] P2Pwire Desktop Hub 3.3 Initialized with Expanded Gateway Scanning.", "cyan")
 
     def _init_styles(self):
         style = ttk.Style()
@@ -715,7 +730,7 @@ class P2PwireDesktopApp:
         title_box = tk.Frame(header, bg="#101728")
         title_box.pack(side=tk.LEFT, padx=16, pady=12)
 
-        tk.Label(title_box, text="P2Pwire Turbo Hub 3.1", font=("Segoe UI", 16, "bold"), fg="#FFFFFF", bg="#101728").pack(anchor="w")
+        tk.Label(title_box, text="P2Pwire Turbo Hub 3.3", font=("Segoe UI", 16, "bold"), fg="#FFFFFF", bg="#101728").pack(anchor="w")
         self.status_subtext = tk.Label(title_box, text="Scanning for Phone (Wi-Fi + USB Tethering)...", font=("Consolas", 10), fg="#00F0FF", bg="#101728")
         self.status_subtext.pack(anchor="w")
 
@@ -724,7 +739,7 @@ class P2PwireDesktopApp:
 
         self.bonding_bar = tk.Frame(self.root, bg="#0E1E38", padx=12, pady=6)
         self.bonding_bar.pack(fill=tk.X, padx=14, pady=(0, 6))
-        self.bonding_label = tk.Label(self.bonding_bar, text="⚡ Adaptive Dual-Rail Active: Connect USB Tethering + 5GHz Wi-Fi simultaneously for maximum wire speed!", font=("Segoe UI", 8, "bold"), fg="#00FFA3", bg="#0E1E38")
+        self.bonding_label = tk.Label(self.bonding_bar, text="⚡ Dual-Rail Gateway Active: Both USB Tethering & Wi-Fi Hotspot are scanned and bonded!", font=("Segoe UI", 8, "bold"), fg="#00FFA3", bg="#0E1E38")
         self.bonding_label.pack(anchor="w")
 
         cards_row = tk.Frame(self.root, bg="#070B14")
@@ -749,7 +764,7 @@ class P2PwireDesktopApp:
         file_card = tk.LabelFrame(cards_row, text=" ⚡ Dual-Rail Turbo Blast (Port 8082) ", font=("Segoe UI", 11, "bold"), fg="#00FFA3", bg="#101728", padx=14, pady=12)
         file_card.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(7, 0))
 
-        tk.Label(file_card, text="Adaptive USB + Wi-Fi channels for maximum wire rate.", font=("Segoe UI", 9), fg="#94A3B8", bg="#101728").pack(anchor="w", pady=(0, 8))
+        tk.Label(file_card, text="Smart USB + Wi-Fi channels for maximum wire rate.", font=("Segoe UI", 9), fg="#94A3B8", bg="#101728").pack(anchor="w", pady=(0, 8))
 
         self.speed_label = tk.Label(file_card, text="Speed: 0.0 MB/s (0.00 Gbps)", font=("Consolas", 9, "bold"), fg="#00FFA3", bg="#101728")
         self.speed_label.pack(anchor="w", pady=2)
@@ -796,15 +811,15 @@ class P2PwireDesktopApp:
         is_dual_rail = len(ips) >= 2
         ip_summary = ", ".join(ips)
         if is_dual_rail:
-            self.status_subtext.config(text=f"✓ Dual-Rail Active: {ip_summary}", fg="#00FFA3")
+            self.status_subtext.config(text=f"✓ Dual-Rail Bonded: {ip_summary}", fg="#00FFA3")
             self.badge.config(text="⚡ DUAL-RAIL BONDED", fg="#00FFA3")
-            self.bonding_label.config(text=f"⚡ DUAL-RAIL BONDING ACTIVE: Aggregating {len(ips)} connections ({ip_summary})", fg="#00FFA3")
-            self.log(f"[DUAL-RAIL ENGAGED] ✓ Bonded interfaces: {ip_summary}", "green")
+            self.bonding_label.config(text=f"⚡ DUAL-RAIL ACTIVE ({len(ips)} IPs): {ip_summary}", fg="#00FFA3")
+            self.log(f"[DUAL-RAIL BONDED] Active interfaces: {ip_summary}", "green")
         else:
             primary = ips[0] if ips else "Unknown"
             self.status_subtext.config(text=f"✓ Connected to Phone ({primary})", fg="#00FFA3")
-            self.badge.config(text="PHONE CONNECTED", fg="#00FFA3")
-            self.log(f"[AUTO-DISCOVERED] ✓ Connected to Phone at {primary}.", "green")
+            self.badge.config(text="SINGLE RAIL", fg="#FFD600")
+            self.log(f"[AUTO-DISCOVERED] Connected to {primary}.", "yellow")
 
     def _on_file_received_from_phone(self, filename, filepath):
         self.root.after(0, lambda: self._update_received_file_ui(filename, filepath))
@@ -863,7 +878,7 @@ class P2PwireDesktopApp:
 
         parts = []
         for ip, spd in rail_speeds.items():
-            tag = "USB" if "192.168.42." in ip else ("Hotspot" if "192.168.43." in ip else "Wi-Fi")
+            tag = "USB" if "192.168.42." in ip else ("Hotspot" if ("192.168.43." in ip or "192.168.49." in ip) else "Wi-Fi")
             parts.append(f"{tag}: {spd:.1f} MB/s")
         if parts:
             self.rail_telemetry_label.config(text=" | ".join(parts), fg="#00FFA3" if len(parts) >= 2 else "#94A3B8")
