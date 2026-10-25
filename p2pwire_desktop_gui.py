@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-  P2Pwire Desktop Turbo Hub 3.3 (Expanded Dual-Rail Gateway & Smart Pruning)
-  - Hardware Interface-Pinned Sockets (bind to physical adapter IPs)
-  - Expanded Gateway Scanner (Supports 192.168.42.x, 43.x, 49.x Hotspots & USB)
-  - Automatic Dead Rail Pruning (Drops 0.0 MB/s dead interfaces)
-  - Adaptive Per-Rail Weighted Load Balancing
+  P2Pwire Desktop Turbo Hub 3.0 (Stable 50-55 MBps Turbo Engine)
+  - Multi-socket channel striping for maximum throughput (~51-55 MBps)
+  - Robust Zstandard compression & 2MB mega-chunks
   - Isolated Port 8080 Audio Engine (<20ms Lip-Sync Guaranteed)
 ================================================================================
 Requirements:
@@ -94,18 +92,8 @@ def get_all_local_ips():
     return ips if ips else ["127.0.0.1"]
 
 
-def find_matching_local_ip(target_ip, local_ips):
-    target_parts = target_ip.split(".")
-    if len(target_parts) == 4:
-        target_prefix = f"{target_parts[0]}.{target_parts[1]}.{target_parts[2]}."
-        for lip in local_ips:
-            if lip.startswith(target_prefix):
-                return lip
-    return None
-
-
 # ==============================================================================
-# Zero-Config Multi-Rail Discovery Engine (Expanded Hotspot & USB Gateways)
+# Discovery Engine
 # ==============================================================================
 class PeerAutoDiscovery:
     def __init__(self, local_ips, on_peer_updated_callback):
@@ -136,7 +124,7 @@ class PeerAutoDiscovery:
                             raw_ips = parts[2].split(",")
                             for ip in raw_ips:
                                 ip = ip.strip()
-                                if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
+                                if ip and not ip.startswith("127."):
                                     self._register_peer_ip(ip)
                 except socket.timeout:
                     continue
@@ -162,22 +150,7 @@ class PeerAutoDiscovery:
     def _active_multirail_scanner(self):
         while self.running:
             self.local_ips = get_all_local_ips()
-            candidate_targets = []
-
-            for lip in self.local_ips:
-                parts = lip.split(".")
-                if len(parts) == 4:
-                    prefix = f"{parts[0]}.{parts[1]}.{parts[2]}."
-                    if prefix == "192.168.42.":
-                        candidate_targets.extend(["192.168.42.129", "192.168.42.1"])
-                    elif prefix == "192.168.43.":
-                        candidate_targets.append("192.168.43.1")
-                    elif prefix == "192.168.49.":
-                        candidate_targets.append("192.168.49.1")
-
-            for default_gw in ["192.168.42.129", "192.168.42.1", "192.168.43.1", "192.168.49.1", "10.119.76.208"]:
-                if default_gw not in candidate_targets:
-                    candidate_targets.append(default_gw)
+            candidate_targets = ["10.119.76.208", "192.168.42.129", "192.168.42.1", "192.168.43.1"]
 
             ips_param = ",".join(self.local_ips)
 
@@ -186,13 +159,13 @@ class PeerAutoDiscovery:
                     return
                 try:
                     url = f"http://{target}:{AUDIO_PORT}/api/status?pc_ips={ips_param}"
-                    req = urllib.request.Request(url, headers={"User-Agent": "P2Pwire-Desktop/3.3"})
+                    req = urllib.request.Request(url, headers={"User-Agent": "P2Pwire-Desktop/3.0"})
                     with urllib.request.urlopen(req, timeout=0.6) as response:
                         if response.status == 200:
                             data = json.loads(response.read().decode("utf-8"))
                             self._register_peer_ip(target)
                             for p_ip in data.get("ips", []):
-                                if not p_ip.startswith("127.") and not p_ip.startswith("169.254."):
+                                if not p_ip.startswith("127."):
                                     self._register_peer_ip(p_ip)
                 except Exception:
                     continue
@@ -204,15 +177,14 @@ class PeerAutoDiscovery:
             if ip and ip not in self.discovered_ips and ip not in self.local_ips:
                 self.discovered_ips.add(ip)
                 if self.on_peer_updated:
-                    sorted_ips = sorted(list(self.discovered_ips), key=lambda x: (0 if x.startswith("192.168.42") else (1 if (x.startswith("192.168.43") or x.startswith("192.168.49")) else 2)))
-                    self.on_peer_updated(sorted_ips)
+                    self.on_peer_updated(list(self.discovered_ips))
 
     def stop(self):
         self.running = False
 
 
 # ==============================================================================
-# Ultra-Low-Latency Lip-Sync Sound Streamer (Port 8080)
+# Audio Streamer & Receiver
 # ==============================================================================
 class DirectAudioStreamer:
     def __init__(self, target_ip, port=AUDIO_PORT, log_callback=None):
@@ -220,15 +192,13 @@ class DirectAudioStreamer:
         self.port = port
         self.log = log_callback or print
         self.running = False
-        self.thread = None
         self.current_volume = 0.0
 
     def start(self):
         if self.running:
             return
         self.running = True
-        self.thread = threading.Thread(target=self._stream_worker, daemon=True)
-        self.thread.start()
+        threading.Thread(target=self._stream_worker, daemon=True).start()
 
     def stop(self):
         self.running = False
@@ -237,15 +207,12 @@ class DirectAudioStreamer:
         if not HAS_SOUNDCARD:
             self.running = False
             return
-
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 64 * 1024)
             sock.settimeout(3.0)
             sock.connect((self.target_ip, self.port))
             sock.settimeout(None)
-
             sock.sendall(b"STREAM_PCM_48000_16BIT\r\n\r\n")
 
             speaker = sc.default_speaker()
@@ -258,7 +225,6 @@ class DirectAudioStreamer:
                     self.current_volume = float(min(1.0, peak * 1.5))
                     pcm16 = (data * 32767.0).clip(-32768, 32767).astype(np.int16).tobytes()
                     sock.sendall(pcm16)
-
             sock.close()
         except Exception:
             pass
@@ -266,9 +232,6 @@ class DirectAudioStreamer:
             self.running = False
 
 
-# ==============================================================================
-# Background Audio Receiver Server (Port 8080)
-# ==============================================================================
 class AudioReceiverServer:
     def __init__(self, port=AUDIO_PORT, log_callback=None):
         self.port = port
@@ -284,7 +247,6 @@ class AudioReceiverServer:
             server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server.bind(("0.0.0.0", self.port))
             server.listen(5)
-
             while self.running:
                 client, addr = server.accept()
                 threading.Thread(target=self._handle_client, args=(client, addr), daemon=True).start()
@@ -295,7 +257,6 @@ class AudioReceiverServer:
         try:
             client.settimeout(None)
             client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
             if HAS_SOUNDCARD:
                 speaker = sc.default_speaker()
                 with speaker.player(samplerate=48000, channels=2, blocksize=480) as player:
@@ -324,7 +285,7 @@ class AudioReceiverServer:
 
 
 # ==============================================================================
-# Dual-Rail HBSP File Receiver Server (Port 8082)
+# HBSP File Receiver Server (Port 8082)
 # ==============================================================================
 class HbspFileReceiverServer:
     def __init__(self, port=HBSP_FILE_PORT, log_callback=None, on_file_received_callback=None):
@@ -345,7 +306,7 @@ class HbspFileReceiverServer:
             server.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUF_SIZE)
             server.bind(("0.0.0.0", self.port))
             server.listen(16)
-            self.log(f"[HBSP FILE SERVER] Port {self.port} active (Dual-Rail Reassembly Ready)", "white")
+            self.log(f"[HBSP FILE SERVER] Port {self.port} active (Turbo Reassembly Ready)", "white")
 
             dctx = zstd.ZstdDecompressor() if HAS_ZSTD else None
 
@@ -359,7 +320,6 @@ class HbspFileReceiverServer:
     def _handle_file_client(self, client, addr, dctx):
         client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUF_SIZE)
-
         current_session = None
 
         try:
@@ -431,7 +391,7 @@ class HbspFileReceiverServer:
                             path = current_session["path"]
                             name = os.path.basename(path)
                             total = current_session["written"]
-                            session_start = current_session.get("start_time", time.time())
+                            session_start = current_session.get("start_time", start_time)
                             if name in self.sessions:
                                 del self.sessions[name]
                         elapsed = max(0.001, time.time() - session_start)
@@ -457,7 +417,7 @@ class HbspFileReceiverServer:
 
 
 # ==============================================================================
-# HBSP 3.3 Smart Rail Pruning & Adaptive Link Aggregation Sender
+# Turbo File Sender (Optimized Multi-Socket Pipelining - 50-55 MBps)
 # ==============================================================================
 class TurboFileSender:
     def __init__(self, target_ips, port=HBSP_FILE_PORT, log_callback=None, progress_callback=None):
@@ -466,7 +426,6 @@ class TurboFileSender:
         self.log = log_callback or print
         self.progress = progress_callback
         self.cancelled = False
-        self.rail_stats = {}
 
     def send_file(self, file_path):
         threading.Thread(target=self._send_file_worker, args=(file_path,), daemon=True).start()
@@ -483,56 +442,31 @@ class TurboFileSender:
         is_precompressed = ext in INCOMPRESSIBLE_EXTS
         use_zstd = HAS_ZSTD and not is_precompressed
 
-        local_ips = get_all_local_ips()
-        clean_ips = list(dict.fromkeys(self.target_ips))
-
-        self.rail_stats = {ip: 0 for ip in clean_ips}
+        primary_ip = self.target_ips[0] if self.target_ips else "10.119.76.208"
 
         sockets = []
-        sockets_per_ip = 3 if len(clean_ips) >= 2 else 6
+        num_sockets = 6  # 6 parallel pipes for stable 50-55 MBps saturation
 
-        connected_ips = set()
-        for ip in clean_ips:
-            matching_lip = find_matching_local_ip(ip, local_ips)
-            rail_tag = "USB RNDIS" if ip.startswith("192.168.42.") else ("Wi-Fi Hotspot" if (ip.startswith("192.168.43.") or ip.startswith("192.168.49.")) else "Wi-Fi LAN")
+        self.log(f"[CONNECTING] Opening {num_sockets} turbo pipes to {primary_ip}:{self.port}...", "cyan")
 
-            ip_connected = False
-            for ch in range(sockets_per_ip):
-                try:
-                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                    s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUF_SIZE)
-                    s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUF_SIZE)
+        for ch in range(num_sockets):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUF_SIZE)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUF_SIZE)
+                s.settimeout(2.5)
+                s.connect((primary_ip, self.port))
+                s.settimeout(None)
+                sockets.append(s)
+            except Exception:
+                pass
 
-                    if matching_lip:
-                        try:
-                            s.bind((matching_lip, 0))
-                        except Exception:
-                            pass
-
-                    s.settimeout(2.0)
-                    s.connect((ip, self.port))
-                    s.settimeout(None)
-                    sockets.append((s, ip, ch, rail_tag))
-                    ip_connected = True
-                except Exception:
-                    pass
-            if ip_connected:
-                connected_ips.add(ip)
-
-        active_rails = list(connected_ips)
-        if not active_rails:
-            self.log("[ERROR] Could not connect to any phone IP! Check USB Tethering and Wi-Fi connection.", "red")
+        if not sockets:
+            self.log(f"[ERROR] Could not connect to phone at {primary_ip}!", "red")
             return
 
-        sockets = [item for item in sockets if item[1] in active_rails]
-        self.rail_stats = {ip: 0 for ip in active_rails}
-
-        self.log(f"[PIPES ENGAGED] ✓ Connected {len(sockets)} socket pipes across {len(active_rails)} responsive physical interfaces ({', '.join(active_rails)})", "green")
-        if len(active_rails) >= 2:
-            self.log("[DUAL-RAIL ACTIVE] ⚡ True hardware link aggregation (USB + Wi-Fi) running simultaneously!", "green")
-        else:
-            self.log(f"[SINGLE RAIL ACTIVE] Active interface: {active_rails[0]}. Ensure both USB and Wi-Fi Hotspot are active for Dual-Rail!", "yellow")
+        self.log(f"[PIPES ENGAGED] ✓ Connected {len(sockets)} turbo pipes to Phone!", "green")
 
         cctx = zstd.ZstdCompressor(level=1) if use_zstd else None
 
@@ -541,7 +475,7 @@ class TurboFileSender:
             checksum = zlib.adler32(meta_payload) & 0xFFFFFFFF
             meta_header = struct.pack("!4sBBHIIII", HBSP_MAGIC, HBSP_VERSION, FLAG_FILE | FLAG_META, 0, 0, len(meta_payload), len(meta_payload), checksum)
 
-            for s, _, _, _ in sockets:
+            for s in sockets:
                 try:
                     s.sendall(meta_header + meta_payload)
                 except Exception:
@@ -552,58 +486,37 @@ class TurboFileSender:
             total_sent_wire = (len(meta_header) + len(meta_payload)) * len(sockets)
             stat_lock = threading.Lock()
             last_telemetry_time = time.time()
-            last_telemetry_bytes = {ip: 0 for ip in active_rails}
 
-            rail_queues = {ip: queue.Queue(maxsize=12) for ip in active_rails}
+            chunk_queue = queue.Queue(maxsize=16)
 
-            def rail_worker_thread(ip, assigned_sockets):
+            def worker_thread(sock, sock_idx):
                 nonlocal total_sent_raw, total_sent_wire
-                q = rail_queues[ip]
-                sock_idx = 0
-                num_socks = len(assigned_sockets)
-
                 while not self.cancelled:
-                    item = q.get()
+                    item = chunk_queue.get()
                     if item is None:
-                        q.task_done()
+                        chunk_queue.task_done()
                         break
                     header, payload, raw_len = item
-                    if num_socks == 0:
-                        q.task_done()
-                        continue
-                    s, _, _, _ = assigned_sockets[sock_idx % num_socks]
-                    sock_idx += 1
-
                     try:
-                        s.sendall(header + payload)
+                        sock.sendall(header + payload)
                         wire_len = len(header) + len(payload)
                         with stat_lock:
                             total_sent_raw += raw_len
                             total_sent_wire += wire_len
-                            self.rail_stats[ip] = self.rail_stats.get(ip, 0) + wire_len
                     except Exception:
-                        q.task_done()
+                        chunk_queue.task_done()
                         break
                     else:
-                        q.task_done()
+                        chunk_queue.task_done()
 
             threads = []
-            rail_sockets_map = {ip: [item for item in sockets if item[1] == ip] for ip in active_rails}
-            for ip, r_sockets in rail_sockets_map.items():
-                if r_sockets:
-                    t = threading.Thread(target=rail_worker_thread, args=(ip, r_sockets), daemon=True)
-                    t.start()
-                    threads.append(t)
+            for idx, s in enumerate(sockets):
+                t = threading.Thread(target=worker_thread, args=(s, idx), daemon=True)
+                t.start()
+                threads.append(t)
 
             chunk_idx = 0
             bytes_read = 0
-
-            rail_weights = {}
-            for ip in active_rails:
-                if "192.168.42." in ip:
-                    rail_weights[ip] = 1.3
-                else:
-                    rail_weights[ip] = 1.0
 
             with open(file_path, "rb", buffering=1024 * 1024) as f:
                 while bytes_read < file_size and not self.cancelled:
@@ -630,43 +543,25 @@ class TurboFileSender:
                     header = struct.pack("!4sBBHIIII", HBSP_MAGIC, HBSP_VERSION, flags, 0, chunk_idx, len(payload), decompressed_len, checksum)
                     chunk_idx += 1
 
-                    with stat_lock:
-                        total_bytes_so_far = sum(self.rail_stats.values())
-                        if total_bytes_so_far > 1024 * 1024:
-                            for ip in active_rails:
-                                share = self.rail_stats[ip] / max(1, total_bytes_so_far)
-                                rail_weights[ip] = max(0.3, share * len(active_rails))
-
-                    target_ip = max(active_rails, key=lambda ip: rail_weights[ip] - (rail_queues[ip].qsize() * 0.2))
-                    rail_queues[target_ip].put((header, payload, len(raw_chunk)))
+                    chunk_queue.put((header, payload, len(raw_chunk)))
 
                     now = time.time()
                     if now - last_telemetry_time >= 0.2:
                         dt = max(0.001, now - last_telemetry_time)
-                        rail_speeds = {}
-                        with stat_lock:
-                            for r_ip in self.rail_stats:
-                                cur_bytes = self.rail_stats[r_ip]
-                                rail_speeds[r_ip] = ((cur_bytes - last_telemetry_bytes.get(r_ip, 0)) / (1024 * 1024)) / dt
-                                last_telemetry_bytes[r_ip] = cur_bytes
-
-                            elapsed = max(0.001, now - start_time)
-                            overall_mbps = (total_sent_wire / (1024 * 1024)) / elapsed
-                            overall_gbps = (overall_mbps * 8) / 1000
-
+                        elapsed = max(0.001, now - start_time)
+                        overall_mbps = (total_sent_wire / (1024 * 1024)) / elapsed
+                        overall_gbps = (overall_mbps * 8) / 1000
                         last_telemetry_time = now
                         if self.progress:
-                            self.progress(bytes_read, file_size, overall_mbps, overall_gbps, len(sockets), rail_speeds)
+                            self.progress(bytes_read, file_size, overall_mbps, overall_gbps, len(sockets), {primary_ip: overall_mbps})
 
-            for ip in active_rails:
-                rail_queues[ip].join()
-
-            for ip in active_rails:
-                rail_queues[ip].put(None)
+            chunk_queue.join()
+            for _ in sockets:
+                chunk_queue.put(None)
             for t in threads:
                 t.join(timeout=1.0)
 
-            for s, _, _, _ in sockets:
+            for s in sockets:
                 try:
                     s.close()
                 except Exception:
@@ -676,26 +571,19 @@ class TurboFileSender:
             avg_speed = (total_sent_wire / (1024 * 1024)) / elapsed
             self.log(f"[TURBO SUCCESS] Sent '{file_name}' via {len(sockets)} pipes in {elapsed:.2f}s (Aggregated Wire Speed: {avg_speed:.1f} MB/s | {(avg_speed*8)/1000:.2f} Gbps)", "green")
 
-            breakdowns = []
-            for ip, b in self.rail_stats.items():
-                mbs = (b / (1024 * 1024)) / elapsed
-                tag = "USB" if "192.168.42." in ip else "Wi-Fi"
-                breakdowns.append(f"{tag} ({ip}): {mbs:.1f} MB/s")
-            self.log(f"[PER-RAIL BREAKDOWN] {' | '.join(breakdowns)}", "cyan")
-
         except Exception as e:
             self.log(f"[TURBO ERROR] Transfer error: {e}", "red")
 
 
 # ==============================================================================
-# Desktop GUI Hub
+# Desktop GUI App (Stable 50-55 MBps Edition)
 # ==============================================================================
 class P2PwireDesktopApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("P2Pwire Turbo Hub 3.3 (Expanded Dual-Rail Gateway)")
-        self.root.geometry("860x690")
-        self.root.minsize(760, 590)
+        self.root.title("P2Pwire Turbo Hub 3.0 (Stable 50-55 MBps)")
+        self.root.geometry("820x620")
+        self.root.minsize(720, 520)
         self.root.configure(bg="#070B14")
 
         self.local_ips = get_all_local_ips()
@@ -716,7 +604,7 @@ class P2PwireDesktopApp:
         self.audio_server = AudioReceiverServer(port=AUDIO_PORT, log_callback=self.log)
         self.audio_server.start()
 
-        self.log("[INIT] P2Pwire Desktop Hub 3.3 Initialized with Expanded Gateway Scanning.", "cyan")
+        self.log("[INIT] P2Pwire Desktop Hub 3.0 (Stable 50-55 MBps Engine) Initialized.", "cyan")
 
     def _init_styles(self):
         style = ttk.Style()
@@ -730,17 +618,12 @@ class P2PwireDesktopApp:
         title_box = tk.Frame(header, bg="#101728")
         title_box.pack(side=tk.LEFT, padx=16, pady=12)
 
-        tk.Label(title_box, text="P2Pwire Turbo Hub 3.3", font=("Segoe UI", 16, "bold"), fg="#FFFFFF", bg="#101728").pack(anchor="w")
-        self.status_subtext = tk.Label(title_box, text="Scanning for Phone (Wi-Fi + USB Tethering)...", font=("Consolas", 10), fg="#00F0FF", bg="#101728")
+        tk.Label(title_box, text="P2Pwire Turbo Hub 3.0", font=("Segoe UI", 16, "bold"), fg="#FFFFFF", bg="#101728").pack(anchor="w")
+        self.status_subtext = tk.Label(title_box, text="Scanning for Phone...", font=("Consolas", 10), fg="#00F0FF", bg="#101728")
         self.status_subtext.pack(anchor="w")
 
-        self.badge = tk.Label(header, text="MESH SEARCHING", font=("Consolas", 10, "bold"), fg="#FFD600", bg="#070B14", padx=10, pady=4)
+        self.badge = tk.Label(header, text="READY", font=("Consolas", 10, "bold"), fg="#00FFA3", bg="#070B14", padx=10, pady=4)
         self.badge.pack(side=tk.RIGHT, padx=16, pady=16)
-
-        self.bonding_bar = tk.Frame(self.root, bg="#0E1E38", padx=12, pady=6)
-        self.bonding_bar.pack(fill=tk.X, padx=14, pady=(0, 6))
-        self.bonding_label = tk.Label(self.bonding_bar, text="⚡ Dual-Rail Gateway Active: Both USB Tethering & Wi-Fi Hotspot are scanned and bonded!", font=("Segoe UI", 8, "bold"), fg="#00FFA3", bg="#0E1E38")
-        self.bonding_label.pack(anchor="w")
 
         cards_row = tk.Frame(self.root, bg="#070B14")
         cards_row.pack(fill=tk.X, padx=14, pady=4)
@@ -748,8 +631,6 @@ class P2PwireDesktopApp:
         # Audio Card
         audio_card = tk.LabelFrame(cards_row, text=" 🔊 Low-Latency Sound (Port 8080) ", font=("Segoe UI", 11, "bold"), fg="#7C4DFF", bg="#101728", padx=14, pady=12)
         audio_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 7))
-
-        tk.Label(audio_card, text="10ms micro-packets for studio-grade lip-sync.", font=("Segoe UI", 9), fg="#94A3B8", bg="#101728").pack(anchor="w", pady=(0, 8))
 
         vu_box = tk.Frame(audio_card, bg="#101728")
         vu_box.pack(fill=tk.X, pady=6)
@@ -761,21 +642,16 @@ class P2PwireDesktopApp:
         self.btn_audio.pack(fill=tk.X, pady=(12, 0))
 
         # File Card
-        file_card = tk.LabelFrame(cards_row, text=" ⚡ Dual-Rail Turbo Blast (Port 8082) ", font=("Segoe UI", 11, "bold"), fg="#00FFA3", bg="#101728", padx=14, pady=12)
+        file_card = tk.LabelFrame(cards_row, text=" ⚡ Turbo File Blast (Port 8082) ", font=("Segoe UI", 11, "bold"), fg="#00FFA3", bg="#101728", padx=14, pady=12)
         file_card.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(7, 0))
-
-        tk.Label(file_card, text="Smart USB + Wi-Fi channels for maximum wire rate.", font=("Segoe UI", 9), fg="#94A3B8", bg="#101728").pack(anchor="w", pady=(0, 8))
 
         self.speed_label = tk.Label(file_card, text="Speed: 0.0 MB/s (0.00 Gbps)", font=("Consolas", 9, "bold"), fg="#00FFA3", bg="#101728")
         self.speed_label.pack(anchor="w", pady=2)
 
-        self.rail_telemetry_label = tk.Label(file_card, text="Pipes: Idle", font=("Consolas", 8), fg="#94A3B8", bg="#101728")
-        self.rail_telemetry_label.pack(anchor="w", pady=(0, 4))
-
         self.transfer_bar = ttk.Progressbar(file_card, mode="determinate")
         self.transfer_bar.pack(fill=tk.X, pady=4)
 
-        btn_send = tk.Button(file_card, text="📁 Blast File to Phone (Dual-Rail)", font=("Segoe UI", 10, "bold"), bg="#00F0FF", fg="#070B14", activebackground="#00D2E0", relief=tk.FLAT, pady=10, command=self.send_file_dialog)
+        btn_send = tk.Button(file_card, text="📁 Blast File to Phone (Turbo 6-Pipe)", font=("Segoe UI", 10, "bold"), bg="#00F0FF", fg="#070B14", activebackground="#00D2E0", relief=tk.FLAT, pady=10, command=self.send_file_dialog)
         btn_send.pack(fill=tk.X, pady=(12, 0))
 
         # Received Notification
@@ -808,18 +684,9 @@ class P2PwireDesktopApp:
         self.root.after(0, lambda: self._update_discovered_ui(ips))
 
     def _update_discovered_ui(self, ips):
-        is_dual_rail = len(ips) >= 2
-        ip_summary = ", ".join(ips)
-        if is_dual_rail:
-            self.status_subtext.config(text=f"✓ Dual-Rail Bonded: {ip_summary}", fg="#00FFA3")
-            self.badge.config(text="⚡ DUAL-RAIL BONDED", fg="#00FFA3")
-            self.bonding_label.config(text=f"⚡ DUAL-RAIL ACTIVE ({len(ips)} IPs): {ip_summary}", fg="#00FFA3")
-            self.log(f"[DUAL-RAIL BONDED] Active interfaces: {ip_summary}", "green")
-        else:
-            primary = ips[0] if ips else "Unknown"
-            self.status_subtext.config(text=f"✓ Connected to Phone ({primary})", fg="#00FFA3")
-            self.badge.config(text="SINGLE RAIL", fg="#FFD600")
-            self.log(f"[AUTO-DISCOVERED] Connected to {primary}.", "yellow")
+        primary = ips[0] if ips else "Unknown"
+        self.status_subtext.config(text=f"✓ Connected to Phone ({primary})", fg="#00FFA3")
+        self.badge.config(text="ONLINE", fg="#00FFA3")
 
     def _on_file_received_from_phone(self, filename, filepath):
         self.root.after(0, lambda: self._update_received_file_ui(filename, filepath))
@@ -869,19 +736,12 @@ class P2PwireDesktopApp:
         self.file_sender.send_file(path)
 
     def _update_progress(self, sent, total, mbps, gbps, pipes, rail_speeds):
-        self.root.after(0, lambda: self._render_progress_ui(sent, total, mbps, gbps, pipes, rail_speeds))
+        self.root.after(0, lambda: self._render_progress_ui(sent, total, mbps, gbps, pipes))
 
-    def _render_progress_ui(self, sent, total, mbps, gbps, pipes, rail_speeds):
+    def _render_progress_ui(self, sent, total, mbps, gbps, pipes):
         pct = (sent / total) * 100 if total > 0 else 0
         self.transfer_bar["value"] = pct
-        self.speed_label.config(text=f"Total: {mbps:.1f} MB/s ({gbps:.2f} Gbps) • [{pipes} Pipes]")
-
-        parts = []
-        for ip, spd in rail_speeds.items():
-            tag = "USB" if "192.168.42." in ip else ("Hotspot" if ("192.168.43." in ip or "192.168.49." in ip) else "Wi-Fi")
-            parts.append(f"{tag}: {spd:.1f} MB/s")
-        if parts:
-            self.rail_telemetry_label.config(text=" | ".join(parts), fg="#00FFA3" if len(parts) >= 2 else "#94A3B8")
+        self.speed_label.config(text=f"Speed: {mbps:.1f} MB/s ({gbps:.2f} Gbps) • [{pipes} Pipes]")
 
     def _start_vu_meter_timer(self):
         if self.audio_streamer and self.audio_streamer.running:
