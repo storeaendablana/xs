@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-P2Pwire Ultra Desktop Studio (v4.0 - Any-to-Any Universal Edition)
+P2Pwire Ultra Desktop Studio (v4.1 - Bulletproof Discovery & Universal Transfer)
 High-Speed Cross-Platform Local Transfer & Wireless Audio Engine
 Compatible with: Windows, macOS, Linux, and Android P2Pwire App
 """
@@ -16,21 +16,18 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-# Optional PyAudio for wireless audio engine
 try:
     import pyaudio
     HAS_PYAUDIO = True
 except ImportError:
     HAS_PYAUDIO = False
 
-
-# ==========================================
-# CONFIGURATION & PROTOCOL CONSTANTS
-# ==========================================
+# Configuration & Protocol Constants
 BROADCAST_PORT = 8089        # UDP Peer Discovery
 FILE_TRANSFER_PORT = 8082    # TCP High-Speed Data Pipes
 AUDIO_STREAM_PORT = 8080     # TCP Low-Latency Audio Stream
 
+BEACON_PREFIX = "P2PWIRE_BEACON:"
 MAGIC_HEADER = b"P2PWIRE_V4"
 CHUNK_SIZE = 2 * 1024 * 1024  # 2MB chunks for maximum throughput
 SOCKET_PIPES = 6             # Parallel TCP data streams
@@ -48,7 +45,7 @@ def get_local_ip():
     """Detects primary local network IP (Wi-Fi / Hotspot / LAN)."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(0.2)
+        s.settimeout(0.3)
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
@@ -57,14 +54,24 @@ def get_local_ip():
         return "127.0.0.1"
 
 
-# ==========================================
-# PEER DISCOVERY ENGINE (UDP BEACON)
-# ==========================================
+def get_broadcast_addresses(local_ip):
+    """Calculates broadcast addresses including 255.255.255.255 and subnet broadcast."""
+    addrs = ["255.255.255.255"]
+    parts = local_ip.split(".")
+    if len(parts) == 4 and local_ip != "127.0.0.1":
+        subnet_bcast = f"{parts[0]}.{parts[1]}.{parts[2]}.255"
+        if subnet_bcast not in addrs:
+            addrs.append(subnet_bcast)
+    return addrs
+
+
 class PeerDiscovery:
-    def __init__(self, node_id, device_name, on_peer_update_cb):
+    def __init__(self, node_id, device_name, local_ip, on_peer_update_cb, log_cb):
         self.node_id = node_id
         self.device_name = device_name
+        self.local_ip = local_ip
         self.on_peer_update = on_peer_update_cb
+        self.log_cb = log_cb
         self.peers = {}
         self.running = False
         self.lock = threading.Lock()
@@ -74,29 +81,107 @@ class PeerDiscovery:
         threading.Thread(target=self._broadcast_loop, daemon=True).start()
         threading.Thread(target=self._listen_loop, daemon=True).start()
         threading.Thread(target=self._cleanup_loop, daemon=True).start()
+        threading.Thread(target=self.scan_subnet_fast, daemon=True).start()
 
     def stop(self):
         self.running = False
+
+    def add_direct_peer(self, ip, name="Manual Peer"):
+        """Directly pairs a peer by IP (bypasses router broadcast blocking)."""
+        clean_ip = ip.strip()
+        if not clean_ip or clean_ip == self.local_ip:
+            return False
+
+        with self.lock:
+            self.peers[clean_ip] = {
+                "id": clean_ip,
+                "name": f"{name} ({clean_ip})",
+                "os": "Android / PC",
+                "ip": clean_ip,
+                "transfer_port": FILE_TRANSFER_PORT,
+                "audio_port": AUDIO_STREAM_PORT,
+                "last_seen": time.time() + 60.0
+            }
+        self.on_peer_update(self.get_peer_list())
+        threading.Thread(target=self._send_unicast_beacon, args=(clean_ip,), daemon=True).start()
+        return True
+
+    def _send_unicast_beacon(self, target_ip):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            msg_str = f"{BEACON_PREFIX}PC:{self.local_ip}:{AUDIO_STREAM_PORT}:{FILE_TRANSFER_PORT}"
+            sock.sendto(msg_str.encode("utf-8"), (target_ip, BROADCAST_PORT))
+            sock.close()
+        except Exception:
+            pass
+
+    def scan_subnet_fast(self):
+        """Concurrently probes the entire local /24 subnet in <2 seconds."""
+        parts = self.local_ip.split(".")
+        if len(parts) != 4 or self.local_ip == "127.0.0.1":
+            return
+
+        prefix = f"{parts[0]}.{parts[1]}.{parts[2]}."
+        self.log_cb(f"Scanning subnet {prefix}1-254 for active P2Pwire devices...", "info")
+
+        def probe_ip(target_ip):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(0.3)
+                beacon = f"{BEACON_PREFIX}PC:{self.local_ip}:{AUDIO_STREAM_PORT}:{FILE_TRANSFER_PORT}".encode("utf-8")
+                s.sendto(beacon, (target_ip, BROADCAST_PORT))
+                s.close()
+
+                tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                tcp_sock.settimeout(0.35)
+                res = tcp_sock.connect_ex((target_ip, FILE_TRANSFER_PORT))
+                tcp_sock.close()
+                if res == 0:
+                    self.add_direct_peer(target_ip, "P2Pwire Device")
+            except Exception:
+                pass
+
+        threads = []
+        for i in range(1, 255):
+            t_ip = f"{prefix}{i}"
+            if t_ip == self.local_ip:
+                continue
+            t = threading.Thread(target=probe_ip, args=(t_ip,), daemon=True)
+            threads.append(t)
+            t.start()
+            if len(threads) >= 40:
+                for th in threads:
+                    th.join(0.05)
+                threads = []
+
+        for th in threads:
+            th.join(0.5)
 
     def _broadcast_loop(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.settimeout(0.5)
 
+        str_beacon = f"{BEACON_PREFIX}PC:{self.local_ip}:{AUDIO_STREAM_PORT}:{FILE_TRANSFER_PORT}".encode("utf-8")
+        json_beacon = json.dumps({
+            "magic": "P2PWIRE_BEACON",
+            "id": self.node_id,
+            "name": self.device_name,
+            "os": f"PC ({sys.platform})",
+            "ip": self.local_ip,
+            "transfer_port": FILE_TRANSFER_PORT,
+            "audio_port": AUDIO_STREAM_PORT
+        }).encode("utf-8")
+
         while self.running:
-            try:
-                payload = json.dumps({
-                    "magic": "P2PWIRE_BEACON",
-                    "id": self.node_id,
-                    "name": self.device_name,
-                    "os": "PC (" + sys.platform + ")",
-                    "transfer_port": FILE_TRANSFER_PORT,
-                    "audio_port": AUDIO_STREAM_PORT
-                }).encode("utf-8")
-                sock.sendto(payload, ("255.255.255.255", BROADCAST_PORT))
-            except Exception:
-                pass
-            time.sleep(1.8)
+            bcast_targets = get_broadcast_addresses(self.local_ip)
+            for bcast_ip in bcast_targets:
+                try:
+                    sock.sendto(str_beacon, (bcast_ip, BROADCAST_PORT))
+                    sock.sendto(json_beacon, (bcast_ip, BROADCAST_PORT))
+                except Exception:
+                    pass
+            time.sleep(1.5)
         sock.close()
 
     def _listen_loop(self):
@@ -105,27 +190,60 @@ class PeerDiscovery:
         try:
             sock.bind(("", BROADCAST_PORT))
         except Exception as e:
-            print(f"[Discovery] Bind failed: {e}")
+            self.log_cb(f"UDP Discovery bind error: {e}", "error")
             return
 
         sock.settimeout(1.0)
         while self.running:
             try:
                 data, addr = sock.recvfrom(2048)
-                msg = json.loads(data.decode("utf-8", errors="ignore"))
-                if msg.get("magic") == "P2PWIRE_BEACON" and msg.get("id") != self.node_id:
-                    peer_id = msg.get("id")
+                sender_ip = addr[0]
+                if sender_ip == self.local_ip:
+                    continue
+
+                raw_text = data.decode("utf-8", errors="ignore").strip()
+
+                if raw_text.startswith(BEACON_PREFIX):
+                    parts = raw_text[len(BEACON_PREFIX):].split(":")
+                    device_type = parts[0] if len(parts) > 0 and parts[0] else "Android Phone"
+                    ip_part = parts[1] if len(parts) > 1 else sender_ip
+                    peer_ip = sender_ip
+                    for sub in ip_part.split(","):
+                        sub_clean = sub.strip()
+                        if sub_clean and sub_clean != self.local_ip:
+                            peer_ip = sub_clean
+                            break
+
                     with self.lock:
-                        self.peers[peer_id] = {
-                            "id": peer_id,
-                            "name": msg.get("name", "Unknown Device"),
-                            "os": msg.get("os", "Android/PC"),
-                            "ip": addr[0],
-                            "transfer_port": msg.get("transfer_port", FILE_TRANSFER_PORT),
-                            "audio_port": msg.get("audio_port", AUDIO_STREAM_PORT),
+                        self.peers[peer_ip] = {
+                            "id": peer_ip,
+                            "name": f"{device_type} ({peer_ip})",
+                            "os": "Android",
+                            "ip": peer_ip,
+                            "transfer_port": int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else FILE_TRANSFER_PORT,
+                            "audio_port": int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else AUDIO_STREAM_PORT,
                             "last_seen": time.time()
                         }
                     self.on_peer_update(self.get_peer_list())
+
+                elif raw_text.startswith("{") and "P2PWIRE_BEACON" in raw_text:
+                    try:
+                        msg = json.loads(raw_text)
+                        peer_id = msg.get("id", sender_ip)
+                        with self.lock:
+                            self.peers[peer_id] = {
+                                "id": peer_id,
+                                "name": msg.get("name", f"PC ({sender_ip})"),
+                                "os": msg.get("os", "PC"),
+                                "ip": sender_ip,
+                                "transfer_port": msg.get("transfer_port", FILE_TRANSFER_PORT),
+                                "audio_port": msg.get("audio_port", AUDIO_STREAM_PORT),
+                                "last_seen": time.time()
+                            }
+                        self.on_peer_update(self.get_peer_list())
+                    except Exception:
+                        pass
+
             except socket.timeout:
                 continue
             except Exception:
@@ -138,7 +256,7 @@ class PeerDiscovery:
             now = time.time()
             changed = False
             with self.lock:
-                dead = [pid for pid, p in self.peers.items() if now - p["last_seen"] > 8.0]
+                dead = [pid for pid, p in self.peers.items() if now - p["last_seen"] > 14.0]
                 for pid in dead:
                     del self.peers[pid]
                     changed = True
@@ -150,9 +268,6 @@ class PeerDiscovery:
             return list(self.peers.values())
 
 
-# ==========================================
-# FILE TRANSFER ENGINE (6-PIPE HBSP PROTOCOL)
-# ==========================================
 class FileTransferEngine:
     def __init__(self, save_dir, progress_cb, log_cb, transfer_complete_cb):
         self.save_dir = save_dir
@@ -280,6 +395,7 @@ class FileTransferEngine:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+                sock.settimeout(6.0)
                 sock.connect((target_ip, FILE_TRANSFER_PORT))
 
                 meta = {
@@ -310,7 +426,7 @@ class FileTransferEngine:
                         speed_mbps = (sent_bytes / (1024 * 1024)) / elapsed
                         self.progress_cb("sending", filename, pct, speed_mbps, sent_bytes, filesize)
 
-                sock.settimeout(10.0)
+                sock.settimeout(12.0)
                 sock.recv(3)
                 elapsed = max(0.001, time.time() - start_time)
                 avg_speed = (filesize / (1024 * 1024)) / elapsed
@@ -329,13 +445,10 @@ class FileTransferEngine:
 
                 sock.close()
             except Exception as e:
-                self.log_cb(f"Failed to send '{filename}': {e}", "error")
+                self.log_cb(f"Failed to send '{filename}' to {target_ip}: {e}", "error")
                 break
 
 
-# ==========================================
-# WIRELESS SOUND ENGINE (SPEAKER & SENDER)
-# ==========================================
 class SoundEngine:
     def __init__(self, log_cb):
         self.log_cb = log_cb
@@ -346,7 +459,6 @@ class SoundEngine:
         self.sender_sock = None
 
     def start_speaker_mode(self, port=AUDIO_STREAM_PORT):
-        """Mode 1: PC acts as Wireless Speaker."""
         if not HAS_PYAUDIO:
             self.log_cb("PyAudio is not installed! Run: pip install pyaudio", "error")
             return False
@@ -409,7 +521,6 @@ class SoundEngine:
             pass
 
     def start_sender_mode(self, target_ip, port=AUDIO_STREAM_PORT):
-        """Mode 2: Streams PC sound to target device."""
         if not HAS_PYAUDIO:
             self.log_cb("PyAudio is not installed! Run: pip install pyaudio", "error")
             return False
@@ -457,15 +568,12 @@ class SoundEngine:
             self.sender_running = False
 
 
-# ==========================================
-# MODERN APPLE MAC DARK GLASSMORPHIC UI
-# ==========================================
 class P2PwireApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("P2Pwire Ultra Studio | Universal Transfer & Sound")
-        self.geometry("1020x760")
-        self.minsize(940, 680)
+        self.geometry("1040x780")
+        self.minsize(940, 700)
 
         self.BG_DARK = "#070B14"
         self.CARD_BG = "#101728"
@@ -495,7 +603,13 @@ class P2PwireApp(tk.Tk):
         )
         self.file_engine.start_receiver()
 
-        self.discovery = PeerDiscovery(self.node_id, self.device_name, self.on_peers_updated)
+        self.discovery = PeerDiscovery(
+            self.node_id,
+            self.device_name,
+            self.local_ip,
+            self.on_peers_updated,
+            self.append_log
+        )
         self.discovery.start()
 
         self._setup_styles()
@@ -554,50 +668,68 @@ class P2PwireApp(tk.Tk):
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=16, pady=4)
 
-        # Tab 1: File Transfer Studio
         self.tab_transfer = tk.Frame(self.notebook, bg=self.BG_DARK)
         self.notebook.add(self.tab_transfer, text="  📁 File Transfer Studio  ")
         self._build_transfer_tab(self.tab_transfer)
 
-        # Tab 2: Sent History
         self.tab_sent = tk.Frame(self.notebook, bg=self.BG_DARK)
         self.notebook.add(self.tab_sent, text="  📤 Sent Files  ")
         self._build_sent_tab(self.tab_sent)
 
-        # Tab 3: Received History
         self.tab_received = tk.Frame(self.notebook, bg=self.BG_DARK)
         self.notebook.add(self.tab_received, text="  📥 Received Files  ")
         self._build_received_tab(self.tab_received)
 
-        # Tab 4: Wireless Sound Engine
         self.tab_sound = tk.Frame(self.notebook, bg=self.BG_DARK)
         self.notebook.add(self.tab_sound, text="  🔊 Wireless Sound Engine  ")
         self._build_sound_tab(self.tab_sound)
 
     def _build_transfer_tab(self, parent):
-        # Peer Selection Card
         peer_card = tk.LabelFrame(parent, text=" 1. Target Peer Device Selection ", bg=self.CARD_BG, fg=self.ACCENT_CYAN,
                                   font=("Segoe UI", 10, "bold"), padx=16, pady=10, highlightbackground=self.BORDER_COLOR)
         peer_card.pack(fill=tk.X, padx=8, pady=8)
 
-        peer_inner = tk.Frame(peer_card, bg=self.CARD_BG)
-        peer_inner.pack(fill=tk.X)
+        peer_row1 = tk.Frame(peer_card, bg=self.CARD_BG)
+        peer_row1.pack(fill=tk.X, pady=(0, 6))
 
-        tk.Label(peer_inner, text="Target Device:", font=("Segoe UI", 9, "bold"), fg=self.TEXT_WHITE, bg=self.CARD_BG).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(peer_row1, text="Target Device:", font=("Segoe UI", 9, "bold"), fg=self.TEXT_WHITE, bg=self.CARD_BG).pack(side=tk.LEFT, padx=(0, 10))
 
         self.peer_var = tk.StringVar(value="Searching for peers...")
-        self.peer_combobox = ttk.Combobox(peer_inner, textvariable=self.peer_var, state="readonly", width=45)
+        self.peer_combobox = ttk.Combobox(peer_row1, textvariable=self.peer_var, state="readonly", width=42)
         self.peer_combobox.pack(side=tk.LEFT, padx=6)
 
-        btn_refresh = tk.Button(peer_inner, text="🔄 Rescan Peers", command=self._refresh_peers_ui,
+        btn_refresh = tk.Button(peer_row1, text="🔄 Rescan", command=self._refresh_peers_ui,
                                 bg=self.INPUT_BG, fg=self.TEXT_WHITE, activebackground=self.ACCENT_CYAN,
                                 relief=tk.FLAT, padx=10, font=("Segoe UI", 8, "bold"))
-        btn_refresh.pack(side=tk.LEFT, padx=10)
+        btn_refresh.pack(side=tk.LEFT, padx=4)
 
-        self.peer_count_lbl = tk.Label(peer_inner, text="0 online peers detected", font=("Segoe UI", 9), fg=self.ACCENT_GREEN, bg=self.CARD_BG)
+        btn_sweep = tk.Button(peer_row1, text="⚡ Scan Subnet", command=self._sweep_subnet_ui,
+                              bg=self.INPUT_BG, fg=self.ACCENT_GREEN, relief=tk.FLAT, padx=10, font=("Segoe UI", 8, "bold"))
+        btn_sweep.pack(side=tk.LEFT, padx=4)
+
+        self.peer_count_lbl = tk.Label(peer_row1, text="0 online peers detected", font=("Segoe UI", 9), fg=self.ACCENT_GREEN, bg=self.CARD_BG)
         self.peer_count_lbl.pack(side=tk.RIGHT, padx=6)
 
-        # Save Location Settings Card
+        # Row 2: Direct IP Pair Box
+        peer_row2 = tk.Frame(peer_card, bg=self.CARD_BG)
+        peer_row2.pack(fill=tk.X, pady=(4, 0))
+
+        tk.Label(peer_row2, text="Direct IP Connect:", font=("Segoe UI", 9), fg=self.TEXT_MUTED, bg=self.CARD_BG).pack(side=tk.LEFT, padx=(0, 10))
+
+        self.direct_ip_entry = tk.Entry(peer_row2, font=("Segoe UI", 9), bg=self.INPUT_BG, fg=self.TEXT_WHITE, insertbackground="white", width=22)
+        ip_parts = self.local_ip.split(".")
+        suggested_ip = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}." if len(ip_parts) == 4 else ""
+        self.direct_ip_entry.insert(0, suggested_ip)
+        self.direct_ip_entry.pack(side=tk.LEFT, padx=6)
+
+        btn_direct_connect = tk.Button(peer_row2, text="🔗 Pair / Connect IP", command=self._connect_direct_ip,
+                                       bg=self.ACCENT_PURPLE, fg="#FFFFFF", activebackground="#C084FC",
+                                       relief=tk.FLAT, padx=12, font=("Segoe UI", 8, "bold"))
+        btn_direct_connect.pack(side=tk.LEFT, padx=4)
+
+        tk.Label(peer_row2, text="(Type phone IP from Android app if Wi-Fi blocks broadcast)", font=("Segoe UI", 8, "italic"), fg=self.TEXT_MUTED, bg=self.CARD_BG).pack(side=tk.LEFT, padx=8)
+
+        # Save Location
         save_card = tk.LabelFrame(parent, text=" 2. Save Location Configuration ", bg=self.CARD_BG, fg=self.ACCENT_PURPLE,
                                   font=("Segoe UI", 10, "bold"), padx=16, pady=8, highlightbackground=self.BORDER_COLOR)
         save_card.pack(fill=tk.X, padx=8, pady=6)
@@ -619,7 +751,7 @@ class P2PwireApp(tk.Tk):
                              bg=self.INPUT_BG, fg=self.ACCENT_CYAN, relief=tk.FLAT, padx=10, font=("Segoe UI", 8, "bold"))
         btn_open.pack(side=tk.LEFT, padx=4)
 
-        # Multi-File Selection & Dispatch Card
+        # Multi-File Selection
         send_card = tk.LabelFrame(parent, text=" 3. Select & Send Files (Multi-Select Enabled) ", bg=self.CARD_BG, fg=self.ACCENT_GREEN,
                                   font=("Segoe UI", 10, "bold"), padx=16, pady=10, highlightbackground=self.BORDER_COLOR)
         send_card.pack(fill=tk.X, padx=8, pady=6)
@@ -645,7 +777,7 @@ class P2PwireApp(tk.Tk):
                                            font=("Segoe UI", 9), fg=self.TEXT_MUTED, bg=self.CARD_BG, anchor="w")
         self.selected_files_lbl.pack(fill=tk.X, pady=(8, 2))
 
-        # Dynamic Transfer Progress Bar Box
+        # Dynamic Progress Bar
         self.progress_container = tk.Frame(parent, bg=self.CARD_BG, padx=16, pady=10, highlightbackground=self.BORDER_COLOR, highlightthickness=1)
 
         self.progress_title = tk.Label(self.progress_container, text="Transferring...", font=("Segoe UI", 9, "bold"), fg=self.ACCENT_CYAN, bg=self.CARD_BG)
@@ -657,7 +789,7 @@ class P2PwireApp(tk.Tk):
         self.progress_stats = tk.Label(self.progress_container, text="0% | 0.0 MB/s", font=("Segoe UI", 8), fg=self.TEXT_WHITE, bg=self.CARD_BG)
         self.progress_stats.pack(anchor="w")
 
-        # Live Activity Log
+        # Live Log
         log_card = tk.LabelFrame(parent, text=" Live Activity Log ", bg=self.BG_DARK, fg=self.TEXT_MUTED,
                                  font=("Segoe UI", 8, "bold"), padx=8, pady=4, highlightbackground=self.BORDER_COLOR)
         log_card.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
@@ -719,7 +851,6 @@ class P2PwireApp(tk.Tk):
         modes_frame = tk.Frame(parent, bg=self.BG_DARK)
         modes_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
-        # OPTION 1: SPEAKER USE (RECEIVE SOUND)
         speaker_card = tk.LabelFrame(modes_frame, text=" Option 1: Speaker Use (Listen to Phone / Other PC) ", bg=self.CARD_BG,
                                      fg=self.ACCENT_GREEN, font=("Segoe UI", 11, "bold"), padx=18, pady=16, highlightbackground=self.BORDER_COLOR)
         speaker_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=6)
@@ -736,7 +867,6 @@ class P2PwireApp(tk.Tk):
                                             relief=tk.FLAT, padx=18, pady=10, font=("Segoe UI", 10, "bold"))
         self.btn_toggle_speaker.pack(anchor="w", pady=10)
 
-        # OPTION 2: SOUND SEND (STREAM PC AUDIO)
         sender_card = tk.LabelFrame(modes_frame, text=" Option 2: Sound Send (Stream PC Sound to Device) ", bg=self.CARD_BG,
                                    fg=self.ACCENT_CYAN, font=("Segoe UI", 11, "bold"), padx=18, pady=16, highlightbackground=self.BORDER_COLOR)
         sender_card.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=6)
@@ -800,8 +930,22 @@ class P2PwireApp(tk.Tk):
         self._check_send_button_state()
 
     def _refresh_peers_ui(self):
-        self.append_log("Broadcasting UDP discovery beacon to network...", "info")
+        self.append_log("Broadcasting dual discovery beacons...", "info")
+        self.discovery.scan_subnet_fast()
         self._render_peers()
+
+    def _sweep_subnet_ui(self):
+        threading.Thread(target=self.discovery.scan_subnet_fast, daemon=True).start()
+
+    def _connect_direct_ip(self):
+        target_ip = self.direct_ip_entry.get().strip()
+        if not target_ip or target_ip == self.local_ip:
+            messagebox.showwarning("Invalid IP", "Please enter a valid peer IP (e.g. 10.119.76.xxx)")
+            return
+
+        self.append_log(f"Attempting direct pair with {target_ip}...", "info")
+        self.discovery.add_direct_peer(target_ip, "Paired Device")
+        self._check_send_button_state()
 
     def _browse_save_folder(self):
         chosen = filedialog.askdirectory(initialdir=self.save_directory, title="Select Destination Folder for Received Files")
