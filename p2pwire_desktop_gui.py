@@ -2,11 +2,11 @@
 """
 ================================================================================
   P2Pwire Desktop Turbo Hub 3.0 (True Dual-Rail Link Aggregation: USB + Wi-Fi)
-  - 8-Channel Multi-Socket Striping (4 on USB + 4 on 5 GHz Wi-Fi = 100+ MB/s)
-  - 8 MB High-BDP Socket Buffer Windows (Zero ACK Stalling)
-  - Non-Blocking Lock-Free 32-Chunk Worker Queue (Zero UI Throttling)
+  - Neumorphic Soft UI Design (Matches Mobile App Look)
+  - Hardware Interface-Pinned Sockets (bind to physical adapter IPs)
+  - Real-Time Per-Rail Live Telemetry (Shows exact USB vs Wi-Fi speed contribution)
+  - Non-Blocking Lock-Free Worker Queue (Zero UI Throttling)
   - Completely Isolated Port 8080 Audio Engine (<20ms Lip-Sync Guaranteed)
-  - Race-Free Atomic EOF Reassembly (No Crashes on Fast Finishes)
 ================================================================================
 Requirements:
   pip install zstandard soundcard numpy
@@ -43,7 +43,7 @@ except ImportError:
     HAS_SOUNDCARD = False
 
 # ==============================================================================
-# HBSP Constants & Tuning (100+ MB/s Pipeline)
+# HBSP Constants & Tuning (1 GBps Pipeline)
 # ==============================================================================
 HBSP_MAGIC = b'HBSP'
 HBSP_VERSION = 3
@@ -61,8 +61,8 @@ INCOMPRESSIBLE_EXTS = {
     '.ogg', '.opus', '.apk', '.iso', '.dmg', '.bin'
 }
 
-CHUNK_SIZE = 1024 * 1024  # 1 MB optimal chunk for 1 GBps throughput
-SOCKET_BUF_SIZE = 8 * 1024 * 1024  # 8 MB socket buffer for 100+ MB/s saturation
+CHUNK_SIZE = 1024 * 1024          # 1 MB optimal chunk for 1 GBps throughput
+SOCKET_BUF_SIZE = 8 * 1024 * 1024 # 8 MB socket buffer for 100+ MB/s saturation
 DISCOVERY_PORT = 8089
 AUDIO_PORT = 8080
 HBSP_FILE_PORT = 8082
@@ -421,8 +421,7 @@ class HbspFileReceiverServer:
                                 "size": expected_size,
                                 "written": 0,
                                 "lock": threading.Lock(),
-                                "start_time": time.time(),
-                                "closed": False
+                                "start_time": time.time()
                             }
                             self.log(f"[FILE BOUND] Target set to '{clean_name}' ({expected_size / (1024*1024):.2f} MB)", "cyan")
                         current_session = self.sessions[clean_name]
@@ -477,7 +476,7 @@ class HbspFileReceiverServer:
 
 
 # ==============================================================================
-# HBSP 3.0 Hardware-Bound Dual-Rail Link Aggregation Sender (8 Parallel Pipes)
+# HBSP 3.0 Hardware-Bound Dual-Rail Link Aggregation Sender
 # ==============================================================================
 class TurboFileSender:
     def __init__(self, target_ips, port=HBSP_FILE_PORT, log_callback=None, progress_callback=None):
@@ -505,7 +504,6 @@ class TurboFileSender:
 
         local_ips = get_all_local_ips()
         clean_ips = list(dict.fromkeys(self.target_ips))
-
         self.rail_stats = {ip: 0 for ip in clean_ips}
 
         sockets = []
@@ -522,7 +520,7 @@ class TurboFileSender:
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUF_SIZE)
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUF_SIZE)
 
-                    # Hardware interface pinning: bind socket to local interface on this subnet
+                    # Hardware interface pinning
                     if matching_lip:
                         try:
                             s.bind((matching_lip, 0))
@@ -591,14 +589,12 @@ class TurboFileSender:
                     else:
                         chunk_queue.task_done()
 
-            # Start worker threads
             threads = []
             for s, ip, ch, tag in sockets:
                 t = threading.Thread(target=worker_thread, args=(s, ip, ch, tag), daemon=True)
                 t.start()
                 threads.append(t)
 
-            # Enqueue chunks from file
             chunk_idx = 0
             bytes_read = 0
 
@@ -676,18 +672,30 @@ class TurboFileSender:
 
 
 # ==============================================================================
-# Ultra-Clean Desktop GUI with Dual-Rail Bonding Badge & Telemetry
+# Ultra-Clean Desktop GUI with Neumorphic Soft UI Palette
 # ==============================================================================
+NEU_BG = "#EDF2F7"
+NEU_SURFACE = "#EDF2F7"
+NEU_SUNKEN = "#E4EBF4"
+NEU_BLUE = "#007AFF"
+NEU_GREEN = "#00C853"
+NEU_RED = "#FF3B30"
+NEU_TEXT_PRIMARY = "#1E293B"
+NEU_TEXT_SECONDARY = "#64748B"
+NEU_TEXT_MUTED = "#94A3B8"
+NEU_BORDER = "#CBD5E1"
+
+
 class P2PwireDesktopApp:
     def __init__(self, root):
         self.root = root
         self.root.title("P2Pwire Turbo Hub 3.0 (Dual-Rail Bonding)")
-        self.root.geometry("860x720")
-        self.root.minsize(760, 600)
-        self.root.configure(bg="#070B14")
+        self.root.geometry("880x710")
+        self.root.minsize(780, 600)
+        self.root.configure(bg=NEU_BG)
 
         self.local_ips = get_all_local_ips()
-        self.phone_ips = ["192.168.42.129"]
+        self.phone_ips = ["10.119.76.208"]
         self.audio_streamer = None
         self.file_sender = None
 
@@ -712,100 +720,110 @@ class P2PwireDesktopApp:
     def _init_styles(self):
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("TProgressbar", thickness=6, troughcolor="#101728", background="#00F0FF")
+        style.configure("TProgressbar", thickness=7, troughcolor=NEU_SUNKEN, background=NEU_BLUE)
 
     def _build_ui(self):
-        # Header Banner
-        header = tk.Frame(self.root, bg="#101728", height=65)
-        header.pack(fill=tk.X, padx=14, pady=10)
+        # Header Banner (Neumorphic Card)
+        header = tk.Frame(self.root, bg=NEU_BG, relief=tk.GROOVE, bd=1)
+        header.pack(fill=tk.X, padx=16, pady=10)
 
-        title_box = tk.Frame(header, bg="#101728")
-        title_box.pack(side=tk.LEFT, padx=16, pady=12)
+        # Top Circular Bolt Badge (Matches reference image)
+        badge_icon_frame = tk.Frame(header, bg=NEU_SUNKEN, width=50, height=50, relief=tk.RAISED, bd=2)
+        badge_icon_frame.pack_propagate(False)
+        badge_icon_frame.pack(side=tk.LEFT, padx=(14, 10), pady=10)
+        tk.Label(badge_icon_frame, text="⚡", font=("Segoe UI", 18, "bold"), fg=NEU_BLUE, bg=NEU_SUNKEN).pack(expand=True)
 
-        tk.Label(title_box, text="P2Pwire Turbo Hub 3.0", font=("Segoe UI", 16, "bold"), fg="#FFFFFF", bg="#101728").pack(anchor="w")
-        self.status_subtext = tk.Label(title_box, text="Scanning for Phone (Wi-Fi + USB Tethering)...", font=("Consolas", 10), fg="#00F0FF", bg="#101728")
+        title_box = tk.Frame(header, bg=NEU_BG)
+        title_box.pack(side=tk.LEFT, padx=6, pady=10)
+
+        tk.Label(title_box, text="Welcome to P2Pwire Turbo", font=("Segoe UI", 15, "bold"), fg=NEU_TEXT_PRIMARY, bg=NEU_BG).pack(anchor="w")
+        self.status_subtext = tk.Label(title_box, text="Scanning for Phone (Wi-Fi + USB Tethering)...", font=("Segoe UI", 9), fg=NEU_BLUE, bg=NEU_BG)
         self.status_subtext.pack(anchor="w")
 
-        self.badge = tk.Label(header, text="MESH SEARCHING", font=("Consolas", 10, "bold"), fg="#FFD600", bg="#070B14", padx=10, pady=4)
+        self.badge = tk.Label(header, text="MESH SEARCHING", font=("Consolas", 9, "bold"), fg=NEU_BLUE, bg=NEU_SUNKEN, relief=tk.SUNKEN, bd=1, padx=10, pady=4)
         self.badge.pack(side=tk.RIGHT, padx=16, pady=16)
 
-        # Dual-Rail Bonding Status Bar
-        self.bonding_bar = tk.Frame(self.root, bg="#0E1E38", padx=12, pady=6)
-        self.bonding_bar.pack(fill=tk.X, padx=14, pady=(0, 4))
-        self.bonding_label = tk.Label(self.bonding_bar, text="⚡ Dual-Rail Ready: Connect USB Tethering + 5GHz Wi-Fi simultaneously to combine pipes for 50-55+ MB/s!", font=("Segoe UI", 8, "bold"), fg="#00FFA3", bg="#0E1E38")
+        # Dual-Rail Bonding Status Bar (Soft Pill Inset)
+        self.bonding_bar = tk.Frame(self.root, bg=NEU_SUNKEN, relief=tk.SUNKEN, bd=1, padx=12, pady=6)
+        self.bonding_bar.pack(fill=tk.X, padx=16, pady=(0, 6))
+        self.bonding_label = tk.Label(self.bonding_bar, text="⚡ Dual-Rail Ready: Connect USB Tethering + 5GHz Wi-Fi simultaneously to combine pipes for 50-55+ MB/s!", font=("Segoe UI", 8, "bold"), fg=NEU_BLUE, bg=NEU_SUNKEN)
         self.bonding_label.pack(anchor="w")
 
-        # Target Phone IP(s) Interactive Bar
-        ip_frame = tk.Frame(self.root, bg="#101728", padx=12, pady=6)
-        ip_frame.pack(fill=tk.X, padx=14, pady=(0, 6))
-        tk.Label(ip_frame, text="Target Phone IP(s):", font=("Segoe UI", 9, "bold"), fg="#94A3B8", bg="#101728").pack(side=tk.LEFT, padx=(0, 8))
-        self.ip_entry = tk.Entry(ip_frame, font=("Consolas", 10), bg="#070B14", fg="#00F0FF", insertbackground="#00F0FF", relief=tk.FLAT)
+        # Target Phone IP(s) Inset Bar (Matches Reference Input Wells)
+        ip_frame = tk.Frame(self.root, bg=NEU_BG, padx=4, pady=4)
+        ip_frame.pack(fill=tk.X, padx=16, pady=(0, 8))
+        tk.Label(ip_frame, text="Target Phone IP(s):", font=("Segoe UI", 9, "bold"), fg=NEU_TEXT_SECONDARY, bg=NEU_BG).pack(side=tk.LEFT, padx=(0, 8))
+        self.ip_entry = tk.Entry(ip_frame, font=("Consolas", 10), bg=NEU_SUNKEN, fg=NEU_TEXT_PRIMARY, insertbackground=NEU_BLUE, relief=tk.SUNKEN, bd=1)
         self.ip_entry.insert(0, ", ".join(self.phone_ips))
         self.ip_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-        tk.Label(ip_frame, text="(Auto-detected or enter comma-separated IPs)", font=("Segoe UI", 8), fg="#64748B", bg="#101728").pack(side=tk.RIGHT)
+        tk.Label(ip_frame, text="(Auto-detected mesh / manual edit)", font=("Segoe UI", 8), fg=NEU_TEXT_MUTED, bg=NEU_BG).pack(side=tk.RIGHT)
 
         # Main Dual Action Cards
-        cards_row = tk.Frame(self.root, bg="#070B14")
-        cards_row.pack(fill=tk.X, padx=14, pady=4)
+        cards_row = tk.Frame(self.root, bg=NEU_BG)
+        cards_row.pack(fill=tk.X, padx=16, pady=4)
 
         # Card 1: Wireless Speaker Rescue (Port 8080)
-        audio_card = tk.LabelFrame(cards_row, text=" 🔊 Low-Latency Sound (Port 8080) ", font=("Segoe UI", 11, "bold"), fg="#7C4DFF", bg="#101728", padx=14, pady=12)
-        audio_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 7))
+        audio_card = tk.LabelFrame(cards_row, text=" 🔊 Low-Latency Sound (Port 8080) ", font=("Segoe UI", 10, "bold"), fg=NEU_TEXT_PRIMARY, bg=NEU_BG, relief=tk.GROOVE, bd=1, padx=14, pady=12)
+        audio_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
 
-        tk.Label(audio_card, text="10ms micro-packets for studio-grade lip-sync.", font=("Segoe UI", 9), fg="#94A3B8", bg="#101728").pack(anchor="w", pady=(0, 8))
+        tk.Label(audio_card, text="10ms micro-packets for studio-grade lip-sync.", font=("Segoe UI", 8), fg=NEU_TEXT_SECONDARY, bg=NEU_BG).pack(anchor="w", pady=(0, 6))
 
-        # Live VU Meter
-        vu_box = tk.Frame(audio_card, bg="#101728")
+        # Live VU Meter (Sunken Well)
+        vu_box = tk.Frame(audio_card, bg=NEU_BG)
         vu_box.pack(fill=tk.X, pady=6)
-        tk.Label(vu_box, text="Sound VU:", font=("Consolas", 9), fg="#94A3B8", bg="#101728").pack(side=tk.LEFT)
-        self.vu_bar = ttk.Progressbar(vu_box, length=160, mode="determinate")
+        tk.Label(vu_box, text="Sound VU:", font=("Segoe UI", 8, "bold"), fg=NEU_TEXT_SECONDARY, bg=NEU_BG).pack(side=tk.LEFT)
+        self.vu_bar = ttk.Progressbar(vu_box, length=140, mode="determinate")
         self.vu_bar.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(8, 0))
 
-        self.btn_audio = tk.Button(audio_card, text="▶ Stream PC Sound to Phone", font=("Segoe UI", 10, "bold"), bg="#7C4DFF", fg="#FFFFFF", activebackground="#651FFF", relief=tk.FLAT, pady=10, command=self.toggle_audio_stream)
-        self.btn_audio.pack(fill=tk.X, pady=(12, 0))
+        self.btn_audio = tk.Button(audio_card, text="▶ Stream PC Sound to Phone", font=("Segoe UI", 9, "bold"), bg=NEU_BLUE, fg="#FFFFFF", activebackground="#0056B3", activeforeground="#FFFFFF", relief=tk.RAISED, bd=2, pady=8, command=self.toggle_audio_stream)
+        self.btn_audio.pack(fill=tk.X, pady=(10, 0))
 
         # Card 2: Single-Action Turbo File Blast (Port 8082)
-        file_card = tk.LabelFrame(cards_row, text=" ⚡ Dual-Rail Turbo Blast (Port 8082) ", font=("Segoe UI", 11, "bold"), fg="#00FFA3", bg="#101728", padx=14, pady=12)
-        file_card.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(7, 0))
+        file_card = tk.LabelFrame(cards_row, text=" ⚡ Dual-Rail Turbo Blast (Port 8082) ", font=("Segoe UI", 10, "bold"), fg=NEU_TEXT_PRIMARY, bg=NEU_BG, relief=tk.GROOVE, bd=1, padx=14, pady=12)
+        file_card.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(8, 0))
 
-        tk.Label(file_card, text="Combined USB + Wi-Fi channels for maximum wire rate.", font=("Segoe UI", 9), fg="#94A3B8", bg="#101728").pack(anchor="w", pady=(0, 8))
+        tk.Label(file_card, text="Combined USB + Wi-Fi channels for maximum wire rate.", font=("Segoe UI", 8), fg=NEU_TEXT_SECONDARY, bg=NEU_BG).pack(anchor="w", pady=(0, 6))
 
-        self.speed_label = tk.Label(file_card, text="Speed: 0.0 MB/s (0.00 Gbps)", font=("Consolas", 9, "bold"), fg="#00FFA3", bg="#101728")
-        self.speed_label.pack(anchor="w", pady=2)
+        # Sunken Speed Box
+        speed_box = tk.Frame(file_card, bg=NEU_SUNKEN, relief=tk.SUNKEN, bd=1, padx=8, pady=4)
+        speed_box.pack(fill=tk.X, pady=2)
 
-        self.rail_telemetry_label = tk.Label(file_card, text="Pipes: Idle", font=("Consolas", 8), fg="#94A3B8", bg="#101728")
-        self.rail_telemetry_label.pack(anchor="w", pady=(0, 4))
+        self.speed_label = tk.Label(speed_box, text="Speed: 0.0 MB/s (0.00 Gbps)", font=("Consolas", 10, "bold"), fg=NEU_BLUE, bg=NEU_SUNKEN)
+        self.speed_label.pack(anchor="w")
+
+        self.rail_telemetry_label = tk.Label(file_card, text="Pipes: Idle", font=("Consolas", 8), fg=NEU_TEXT_SECONDARY, bg=NEU_BG)
+        self.rail_telemetry_label.pack(anchor="w", pady=(2, 4))
 
         self.transfer_bar = ttk.Progressbar(file_card, mode="determinate")
         self.transfer_bar.pack(fill=tk.X, pady=4)
 
-        btn_send = tk.Button(file_card, text="📁 Blast File to Phone (Dual-Rail)", font=("Segoe UI", 10, "bold"), bg="#00F0FF", fg="#070B14", activebackground="#00D2E0", relief=tk.FLAT, pady=10, command=self.send_file_dialog)
-        btn_send.pack(fill=tk.X, pady=(12, 0))
+        btn_send = tk.Button(file_card, text="📁 Blast File to Phone (Dual-Rail)", font=("Segoe UI", 9, "bold"), bg=NEU_BLUE, fg="#FFFFFF", activebackground="#0056B3", activeforeground="#FFFFFF", relief=tk.RAISED, bd=2, pady=8, command=self.send_file_dialog)
+        btn_send.pack(fill=tk.X, pady=(8, 0))
 
-        # Received File Notification Banner
-        self.received_frame = tk.Frame(self.root, bg="#18233C", padx=12, pady=8)
-        self.received_label = tk.Label(self.received_frame, text="📥 Received files will appear here", font=("Segoe UI", 10, "bold"), fg="#00FFA3", bg="#18233C")
+        # Received File Notification Banner (Sunken Inset)
+        self.received_frame = tk.Frame(self.root, bg=NEU_SUNKEN, relief=tk.SUNKEN, bd=1, padx=12, pady=6)
+        self.received_label = tk.Label(self.received_frame, text="📥 Received files will appear here", font=("Segoe UI", 9, "bold"), fg=NEU_GREEN, bg=NEU_SUNKEN)
         self.received_label.pack(side=tk.LEFT, padx=6)
-        btn_open_folder = tk.Button(self.received_frame, text="📂 Open Downloads", font=("Segoe UI", 9, "bold"), bg="#00FFA3", fg="#070B14", relief=tk.FLAT, command=self.open_downloads_folder)
+        btn_open_folder = tk.Button(self.received_frame, text="📂 Open Downloads", font=("Segoe UI", 8, "bold"), bg=NEU_SURFACE, fg=NEU_TEXT_PRIMARY, relief=tk.RAISED, bd=1, command=self.open_downloads_folder)
         btn_open_folder.pack(side=tk.RIGHT, padx=6)
-        self.received_frame.pack(fill=tk.X, padx=14, pady=(2, 6))
+        self.received_frame.pack(fill=tk.X, padx=16, pady=(4, 6))
 
-        # Log Frame
-        log_frame = tk.LabelFrame(self.root, text=" 📋 Session Status ", font=("Segoe UI", 10, "bold"), fg="#94A3B8", bg="#070B14", padx=10, pady=6)
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=14, pady=(4, 10))
+        # Log Frame (Sunken Well)
+        log_frame = tk.LabelFrame(self.root, text=" 📋 Session Status ", font=("Segoe UI", 9, "bold"), fg=NEU_TEXT_SECONDARY, bg=NEU_BG, relief=tk.GROOVE, bd=1, padx=8, pady=4)
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(2, 12))
 
-        self.log_text = tk.Text(log_frame, bg="#04060C", fg="#F1F5F9", font=("Consolas", 10), wrap=tk.WORD, relief=tk.FLAT)
+        self.log_text = tk.Text(log_frame, bg=NEU_SUNKEN, fg=NEU_TEXT_PRIMARY, font=("Consolas", 9), wrap=tk.WORD, relief=tk.SUNKEN, bd=1, insertbackground=NEU_BLUE)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         scrollbar = tk.Scrollbar(log_frame, command=self.log_text.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.config(yscrollcommand=scrollbar.set)
 
-        self.log_text.tag_config("cyan", foreground="#00F0FF")
-        self.log_text.tag_config("green", foreground="#00FFA3")
-        self.log_text.tag_config("yellow", foreground="#FFD600")
-        self.log_text.tag_config("red", foreground="#FF4060")
-        self.log_text.tag_config("white", foreground="#E2E8F0")
+        self.log_text.tag_config("cyan", foreground=NEU_BLUE)
+        self.log_text.tag_config("green", foreground=NEU_GREEN)
+        self.log_text.tag_config("yellow", foreground="#D97706")
+        self.log_text.tag_config("red", foreground=NEU_RED)
+        self.log_text.tag_config("white", foreground=NEU_TEXT_PRIMARY)
 
     def _on_peers_updated(self, ips):
         self.phone_ips = ips
@@ -828,14 +846,14 @@ class P2PwireDesktopApp:
         except Exception:
             pass
         if is_dual_rail:
-            self.status_subtext.config(text=f"✓ Dual-Rail Active: {ip_summary}", fg="#00FFA3")
-            self.badge.config(text="⚡ DUAL-RAIL BONDED", fg="#00FFA3")
-            self.bonding_label.config(text=f"⚡ DUAL-RAIL BONDING ACTIVE: Aggregating {len(ips)} connections ({ip_summary}) for 50-55+ MB/s!", fg="#00FFA3")
+            self.status_subtext.config(text=f"✓ Dual-Rail Active: {ip_summary}", fg=NEU_GREEN)
+            self.badge.config(text="⚡ DUAL-RAIL BONDED", fg=NEU_GREEN)
+            self.bonding_label.config(text=f"⚡ DUAL-RAIL BONDING ACTIVE: Aggregating {len(ips)} connections ({ip_summary}) for 50-55+ MB/s!", fg=NEU_GREEN)
             self.log(f"[DUAL-RAIL ENGAGED] ✓ Bonded interfaces: {ip_summary}. Combined throughput enabled!", "green")
         else:
             primary = ips[0] if ips else "Unknown"
-            self.status_subtext.config(text=f"✓ Connected to Phone ({primary})", fg="#00FFA3")
-            self.badge.config(text="PHONE CONNECTED", fg="#00FFA3")
+            self.status_subtext.config(text=f"✓ Connected to Phone ({primary})", fg=NEU_GREEN)
+            self.badge.config(text="PHONE CONNECTED", fg=NEU_GREEN)
             self.log(f"[AUTO-DISCOVERED] ✓ Connected to Phone at {primary}.", "green")
 
     def _on_file_received_from_phone(self, filename, filepath):
@@ -872,12 +890,12 @@ class P2PwireDesktopApp:
         if self.audio_streamer and self.audio_streamer.running:
             self.audio_streamer.stop()
             self.audio_streamer = None
-            self.btn_audio.config(text="▶ Stream PC Sound to Phone", bg="#7C4DFF", fg="#FFFFFF")
+            self.btn_audio.config(text="▶ Stream PC Sound to Phone", bg=NEU_BLUE, fg="#FFFFFF")
         else:
             primary_ip = self.phone_ips[0] if self.phone_ips else "127.0.0.1"
             self.audio_streamer = DirectAudioStreamer(primary_ip, port=AUDIO_PORT, log_callback=self.log)
             self.audio_streamer.start()
-            self.btn_audio.config(text="⏹ Stop Sound Stream", bg="#FF4060", fg="#FFFFFF")
+            self.btn_audio.config(text="⏹ Stop Sound Stream", bg=NEU_RED, fg="#FFFFFF")
 
     def send_file_dialog(self):
         self._sync_ips_from_entry()
@@ -895,12 +913,13 @@ class P2PwireDesktopApp:
         self.transfer_bar["value"] = pct
         self.speed_label.config(text=f"Total: {mbps:.1f} MB/s ({gbps:.2f} Gbps) • [{pipes} Pipes]")
 
+        # Show exact breakdown per rail
         parts = []
         for ip, spd in rail_speeds.items():
             tag = "USB" if "192.168.42." in ip else ("Hotspot" if "192.168.43." in ip else "Wi-Fi")
             parts.append(f"{tag}: {spd:.1f} MB/s")
         if parts:
-            self.rail_telemetry_label.config(text=" | ".join(parts), fg="#00FFA3" if len(parts) >= 2 else "#94A3B8")
+            self.rail_telemetry_label.config(text=" | ".join(parts), fg=NEU_GREEN if len(parts) >= 2 else NEU_TEXT_MUTED)
 
     def _start_vu_meter_timer(self):
         if self.audio_streamer and self.audio_streamer.running:
