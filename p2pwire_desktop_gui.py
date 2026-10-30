@@ -2,7 +2,6 @@
 """
 ================================================================================
   P2Pwire Desktop Turbo Hub 3.0 (True Dual-Rail Link Aggregation: USB + Wi-Fi)
-  - Neumorphic Soft UI Design (Matches Mobile App Look)
   - Hardware Interface-Pinned Sockets (bind to physical adapter IPs)
   - Real-Time Per-Rail Live Telemetry (Shows exact USB vs Wi-Fi speed contribution)
   - Non-Blocking Lock-Free Worker Queue (Zero UI Throttling)
@@ -53,7 +52,7 @@ FLAG_FILE = 0x08
 FLAG_EOF = 0x20
 FLAG_META = 0x40
 
-# Incompressible media types bypass Zstd to saturate hardware line rate
+# Incompressible media types (ISO, MKV, MP4, ZIP, etc.) bypass Zstd to saturate hardware line rate
 INCOMPRESSIBLE_EXTS = {
     '.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
     '.zip', '.rar', '.7z', '.gz', '.bz2', '.xz', '.tar', '.tgz',
@@ -61,8 +60,8 @@ INCOMPRESSIBLE_EXTS = {
     '.ogg', '.opus', '.apk', '.iso', '.dmg', '.bin'
 }
 
-CHUNK_SIZE = 1024 * 1024          # 1 MB optimal chunk for 1 GBps throughput
-SOCKET_BUF_SIZE = 8 * 1024 * 1024 # 8 MB socket buffer for 100+ MB/s saturation
+CHUNK_SIZE = 1024 * 1024  # 1 MB optimal chunk for 1 GBps throughput
+SOCKET_BUF_SIZE = 8 * 1024 * 1024  # 8 MB socket buffer for 100+ MB/s saturation
 DISCOVERY_PORT = 8089
 AUDIO_PORT = 8080
 HBSP_FILE_PORT = 8082
@@ -83,15 +82,41 @@ def get_all_local_ips():
     except Exception:
         pass
 
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        primary = s.getsockname()[0]
-        s.close()
-        if primary not in ips and not primary.startswith("127."):
-            ips.insert(0, primary)
-    except Exception:
-        pass
+    # Windows ipconfig parser (CRITICAL: discovers virtual USB RNDIS 192.168.42.x and Hotspots omitted by gethostbyname)
+    if os.name == 'nt':
+        try:
+            output = subprocess.check_output("ipconfig", shell=True, text=True, errors="ignore")
+            for line in output.splitlines():
+                line = line.strip()
+                if "IPv4" in line or "IP Address" in line:
+                    parts = line.split(":")
+                    if len(parts) >= 2:
+                        ip = parts[1].strip().replace("(Preferred)", "").strip()
+                        if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
+                            if ip not in ips:
+                                ips.append(ip)
+        except Exception:
+            pass
+    else:
+        try:
+            output = subprocess.check_output("hostname -I", shell=True, text=True, errors="ignore")
+            for ip in output.split():
+                ip = ip.strip()
+                if ip and not ip.startswith("127.") and ip not in ips:
+                    ips.append(ip)
+        except Exception:
+            pass
+
+    for probe_target in ["8.8.8.8", "192.168.42.129", "192.168.43.1", "192.168.1.1"]:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect((probe_target, 80))
+            lip = s.getsockname()[0]
+            s.close()
+            if lip and not lip.startswith("127.") and lip not in ips:
+                ips.append(lip)
+        except Exception:
+            pass
 
     return ips if ips else ["127.0.0.1"]
 
@@ -504,6 +529,7 @@ class TurboFileSender:
 
         local_ips = get_all_local_ips()
         clean_ips = list(dict.fromkeys(self.target_ips))
+
         self.rail_stats = {ip: 0 for ip in clean_ips}
 
         sockets = []
@@ -520,7 +546,7 @@ class TurboFileSender:
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUF_SIZE)
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUF_SIZE)
 
-                    # Hardware interface pinning
+                    # Hardware interface pinning: bind socket to local interface on this subnet
                     if matching_lip:
                         try:
                             s.bind((matching_lip, 0))
@@ -589,12 +615,14 @@ class TurboFileSender:
                     else:
                         chunk_queue.task_done()
 
+            # Start worker threads
             threads = []
             for s, ip, ch, tag in sockets:
                 t = threading.Thread(target=worker_thread, args=(s, ip, ch, tag), daemon=True)
                 t.start()
                 threads.append(t)
 
+            # Enqueue chunks from file
             chunk_idx = 0
             bytes_read = 0
 
@@ -625,6 +653,7 @@ class TurboFileSender:
                     chunk_queue.put((header, payload, len(raw_chunk)))
                     chunk_idx += 1
 
+                    # Non-blocking periodic telemetry update
                     now = time.time()
                     if now - last_telemetry_time >= 0.2:
                         dt = max(0.001, now - last_telemetry_time)
@@ -727,7 +756,6 @@ class P2PwireDesktopApp:
         header = tk.Frame(self.root, bg=NEU_BG, relief=tk.GROOVE, bd=1)
         header.pack(fill=tk.X, padx=16, pady=10)
 
-        # Top Circular Bolt Badge (Matches reference image)
         badge_icon_frame = tk.Frame(header, bg=NEU_SUNKEN, width=50, height=50, relief=tk.RAISED, bd=2)
         badge_icon_frame.pack_propagate(False)
         badge_icon_frame.pack(side=tk.LEFT, padx=(14, 10), pady=10)
@@ -743,13 +771,13 @@ class P2PwireDesktopApp:
         self.badge = tk.Label(header, text="MESH SEARCHING", font=("Consolas", 9, "bold"), fg=NEU_BLUE, bg=NEU_SUNKEN, relief=tk.SUNKEN, bd=1, padx=10, pady=4)
         self.badge.pack(side=tk.RIGHT, padx=16, pady=16)
 
-        # Dual-Rail Bonding Status Bar (Soft Pill Inset)
+        # Dual-Rail Bonding Status Bar
         self.bonding_bar = tk.Frame(self.root, bg=NEU_SUNKEN, relief=tk.SUNKEN, bd=1, padx=12, pady=6)
         self.bonding_bar.pack(fill=tk.X, padx=16, pady=(0, 6))
         self.bonding_label = tk.Label(self.bonding_bar, text="⚡ Dual-Rail Ready: Connect USB Tethering + 5GHz Wi-Fi simultaneously to combine pipes for 50-55+ MB/s!", font=("Segoe UI", 8, "bold"), fg=NEU_BLUE, bg=NEU_SUNKEN)
         self.bonding_label.pack(anchor="w")
 
-        # Target Phone IP(s) Inset Bar (Matches Reference Input Wells)
+        # Target Phone IP(s) Inset Bar
         ip_frame = tk.Frame(self.root, bg=NEU_BG, padx=4, pady=4)
         ip_frame.pack(fill=tk.X, padx=16, pady=(0, 8))
         tk.Label(ip_frame, text="Target Phone IP(s):", font=("Segoe UI", 9, "bold"), fg=NEU_TEXT_SECONDARY, bg=NEU_BG).pack(side=tk.LEFT, padx=(0, 8))
@@ -768,7 +796,7 @@ class P2PwireDesktopApp:
 
         tk.Label(audio_card, text="10ms micro-packets for studio-grade lip-sync.", font=("Segoe UI", 8), fg=NEU_TEXT_SECONDARY, bg=NEU_BG).pack(anchor="w", pady=(0, 6))
 
-        # Live VU Meter (Sunken Well)
+        # Live VU Meter
         vu_box = tk.Frame(audio_card, bg=NEU_BG)
         vu_box.pack(fill=tk.X, pady=6)
         tk.Label(vu_box, text="Sound VU:", font=("Segoe UI", 8, "bold"), fg=NEU_TEXT_SECONDARY, bg=NEU_BG).pack(side=tk.LEFT)
@@ -800,7 +828,7 @@ class P2PwireDesktopApp:
         btn_send = tk.Button(file_card, text="📁 Blast File to Phone (Dual-Rail)", font=("Segoe UI", 9, "bold"), bg=NEU_BLUE, fg="#FFFFFF", activebackground="#0056B3", activeforeground="#FFFFFF", relief=tk.RAISED, bd=2, pady=8, command=self.send_file_dialog)
         btn_send.pack(fill=tk.X, pady=(8, 0))
 
-        # Received File Notification Banner (Sunken Inset)
+        # Received File Notification Banner
         self.received_frame = tk.Frame(self.root, bg=NEU_SUNKEN, relief=tk.SUNKEN, bd=1, padx=12, pady=6)
         self.received_label = tk.Label(self.received_frame, text="📥 Received files will appear here", font=("Segoe UI", 9, "bold"), fg=NEU_GREEN, bg=NEU_SUNKEN)
         self.received_label.pack(side=tk.LEFT, padx=6)
@@ -808,7 +836,7 @@ class P2PwireDesktopApp:
         btn_open_folder.pack(side=tk.RIGHT, padx=6)
         self.received_frame.pack(fill=tk.X, padx=16, pady=(4, 6))
 
-        # Log Frame (Sunken Well)
+        # Log Frame
         log_frame = tk.LabelFrame(self.root, text=" 📋 Session Status ", font=("Segoe UI", 9, "bold"), fg=NEU_TEXT_SECONDARY, bg=NEU_BG, relief=tk.GROOVE, bd=1, padx=8, pady=4)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(2, 12))
 
@@ -913,7 +941,6 @@ class P2PwireDesktopApp:
         self.transfer_bar["value"] = pct
         self.speed_label.config(text=f"Total: {mbps:.1f} MB/s ({gbps:.2f} Gbps) • [{pipes} Pipes]")
 
-        # Show exact breakdown per rail
         parts = []
         for ip, spd in rail_speeds.items():
             tag = "USB" if "192.168.42." in ip else ("Hotspot" if "192.168.43." in ip else "Wi-Fi")
