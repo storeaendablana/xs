@@ -6,9 +6,11 @@
   - Real-Time Per-Rail Live Telemetry (Shows exact USB vs Wi-Fi speed contribution)
   - Non-Blocking Lock-Free Worker Queue (Zero UI Throttling)
   - Completely Isolated Port 8080 Audio Engine (<20ms Lip-Sync Guaranteed)
-  - Modern Sleek Studio Interface with 2 Distinct Tabs (Files & Audio)
-  - Full Persistent Sent & Received Transfer History
-  - High-Definition Aeroplane Contrail & Supersonic Sound Engine
+  - Unified Single-Bar Supersonic Jet Flight Runway (Sent & Received)
+  - Dedicated 3-Tab Studio Architecture:
+      Tab 1: ⚡ File Transfer & History
+      Tab 2: 🔊 Sound Transmission (10ms Lip-Sync)
+      Tab 3: 📋 Hub Diagnostics & Network
 ================================================================================
 Requirements:
   pip install zstandard soundcard numpy
@@ -630,7 +632,7 @@ class TurboFileSender:
                 threads.append(t)
 
             if self.progress:
-                self.progress(0, file_size, 0.0, 0.0, len(sockets), {})
+                self.progress(0, file_size, 0.0, 0.0, len(sockets), {}, file_name=file_name)
 
             chunk_idx = 0
             bytes_read = 0
@@ -676,7 +678,7 @@ class TurboFileSender:
                             overall_gbps = (overall_mbps * 8) / 1000
                         last_telemetry_time = now
                         if self.progress:
-                            self.progress(bytes_read, file_size, overall_mbps, overall_gbps, len(sockets), rail_speeds)
+                            self.progress(bytes_read, file_size, overall_mbps, overall_gbps, len(sockets), rail_speeds, file_name=file_name)
 
             chunk_queue.join()
             for _ in sockets:
@@ -700,7 +702,7 @@ class TurboFileSender:
             elapsed = max(0.001, time.time() - start_time)
             avg_speed = (total_sent_wire / (1024 * 1024)) / elapsed
             if self.progress:
-                self.progress(file_size, file_size, avg_speed, (avg_speed * 8) / 1000, len(sockets), {}, is_cancelled=self.cancelled)
+                self.progress(file_size, file_size, avg_speed, (avg_speed * 8) / 1000, len(sockets), {}, is_cancelled=self.cancelled, file_name=file_name)
 
             status_str = "CANCELLED" if self.cancelled else "COMPLETED"
             if self.on_complete:
@@ -768,10 +770,10 @@ def play_jet_audio(sound_type="takeoff"):
 
 
 # ==============================================================================
-# High-Definition Modern Jet Airliner Flight Canvas
+# High-Definition Modern Jet Airliner Flight Canvas (Clean Solid Runway & Glow)
 # ==============================================================================
 class AeroplaneCurveCanvas(tk.Canvas):
-    def __init__(self, master, width=320, height=62, **kwargs):
+    def __init__(self, master, width=400, height=68, **kwargs):
         super().__init__(
             master, width=width, height=height,
             bg=COLOR_CANVAS_SKY, highlightthickness=1,
@@ -844,47 +846,47 @@ class AeroplaneCurveCanvas(tk.Canvas):
 
     def draw(self):
         self.delete("all")
-        pad_x = 24
+        pad_x = 28
         start_x = pad_x
         end_x = max(start_x + 50, self.w - pad_x)
         travel_x = end_x - start_x
-        start_y = self.h - 16
+        start_y = self.h - 18
 
         # Altitude dynamically climbs with transfer speed (higher speed = climbs to ceiling)
-        speed_factor = max(0.25, min(1.0, self.speed_mbps / 45.0))
-        climb_span = (self.h - 26) * speed_factor
+        speed_factor = max(0.28, min(1.0, self.speed_mbps / 45.0))
+        climb_span = (self.h - 30) * speed_factor
 
         def get_pt(p):
             x = start_x + travel_x * p
             y = start_y - climb_span * (p ** 1.25)
             return x, y
 
-        # 1. Subtle High-Tech Grid & Horizon Guidance Line
-        self.create_line(pad_x, start_y + 4, self.w - pad_x, start_y + 4, fill="#1E293B", dash=(3, 3), width=1)
+        # 1. Clean Solid Runway Baseline (Clean solid guide line, NO awkward dashes!)
+        self.create_line(pad_x, start_y + 4, self.w - pad_x, start_y + 4, fill="#1E293B", width=2)
 
-        # 2. Planned Supersonic Flight Corridor (Dashed Curve)
+        # 2. Smooth Solid Flight Vector Track (Clean solid trajectory corridor)
         corridor_pts = []
-        for s in range(25):
-            p = s / 24.0
+        for s in range(32):
+            p = s / 31.0
             cx, cy = get_pt(p)
             corridor_pts.extend([cx, cy])
         if len(corridor_pts) >= 4:
-            self.create_line(*corridor_pts, fill="#1E3A5F", dash=(4, 6), width=1)
+            self.create_line(*corridor_pts, fill="#0F2B48", width=2, smooth=True)
 
-        # 3. Destination Airport / Sky Radar Beacon
+        # 3. Destination Airport Radar Beacon
         bx, by = get_pt(1.0)
         beacon_color = COLOR_DANGER if self.is_cancelled else (COLOR_SUCCESS if self.progress >= 1.0 else COLOR_ACCENT)
-        self.create_oval(bx - 4, by - 4, bx + 4, by + 4, fill=beacon_color, outline="")
+        self.create_oval(bx - 5, by - 5, bx + 5, by + 5, fill=beacon_color, outline="")
         if self.progress >= 1.0 and not self.is_cancelled:
-            self.create_oval(bx - 8, by - 8, bx + 8, by + 8, outline=COLOR_SUCCESS, width=1.5)
-            self.create_oval(bx - 12, by - 12, bx + 12, by + 12, outline=COLOR_SUCCESS, width=0.8)
+            self.create_oval(bx - 9, by - 9, bx + 9, by + 9, outline=COLOR_SUCCESS, width=2)
+            self.create_oval(bx - 14, by - 14, bx + 14, by + 14, outline=COLOR_SUCCESS, width=1)
 
-        # 4. Dense Supersonic Contrail Vapor Trail (The Progress Bar)
+        # 4. Dense Supersonic Contrail Stream (Smooth glowing vector line, NO dashes!)
         if self.progress > 0.005:
             contrail_pts = []
-            steps = max(3, int(40 * self.progress))
+            steps = max(4, int(50 * self.progress))
             for s in range(steps + 1):
-                p = min(self.progress, s / 40.0)
+                p = min(self.progress, s / 50.0)
                 cx, cy = get_pt(p)
                 contrail_pts.extend([cx, cy])
 
@@ -892,12 +894,12 @@ class AeroplaneCurveCanvas(tk.Canvas):
                 glow_color = COLOR_DANGER if self.is_cancelled else ("#38BDF8" if self.progress >= 1.0 else "#0284C7")
                 core_color = "#FECDD3" if self.is_cancelled else ("#A7F3D0" if self.progress >= 1.0 else "#E0F2FE")
 
-                # Layer 1: Wide atmospheric glow
-                self.create_line(*contrail_pts, fill=glow_color, width=5)
-                # Layer 2: Dense vapor condensation line
-                self.create_line(*contrail_pts, fill=core_color, width=2)
+                # Layer 1: Smooth Wide Atmospheric Glow
+                self.create_line(*contrail_pts, fill=glow_color, width=6, smooth=True)
+                # Layer 2: Smooth Solid Condensation Core Line
+                self.create_line(*contrail_pts, fill=core_color, width=2.5, smooth=True)
 
-        # 5. Real Modern Jet Airliner Polygon Drawing
+        # 5. Real Modern Jet Airliner Drawing
         px, py = get_pt(self.progress)
         is_exited = False
         if self.progress >= 1.0 and not self.is_cancelled and self.completion_exit_step > 0:
@@ -912,17 +914,16 @@ class AeroplaneCurveCanvas(tk.Canvas):
 
             # Twin Underwing Turbofan Exhaust Flames
             if not self.is_cancelled and 0.01 < self.progress < 1.0:
-                flame_len = 10 + int(self.speed_mbps * 0.15)
+                flame_len = 11 + int(self.speed_mbps * 0.16)
                 self.create_line(px - flame_len, py - 5.5, px - 3, py - 5.5, fill="#F97316", width=2.5)
                 self.create_line(px - flame_len, py + 5.5, px - 3, py + 5.5, fill="#F97316", width=2.5)
                 self.create_line(px - (flame_len - 4), py - 5.5, px - 3, py - 5.5, fill="#FEF08A", width=1.5)
                 self.create_line(px - (flame_len - 4), py + 5.5, px - 3, py + 5.5, fill="#FEF08A", width=1.5)
 
-            # Aerodynamic Airliner Polygon: Pointed radome (+12), cockpit windshield (+6),
-            # swept wings with blended winglets (y ±12), wing trailing edge, fuselage, tail stabilizers (y ±6)
+            # Aerodynamic Airliner Polygon
             poly_points = [
-                px + 13, py - 1.5,  # Nose cone tip
-                px + 7,  py - 2.5,  # Cockpit windshield
+                px + 14, py - 1.5,  # Nose cone tip
+                px + 8,  py - 2.5,  # Cockpit windshield
                 px + 3,  py - 3.0,  # Forward wing root
                 px - 4,  py - 12.0, # Starboard swept wingtip
                 px - 6,  py - 11.0, # Winglet fin
@@ -938,17 +939,17 @@ class AeroplaneCurveCanvas(tk.Canvas):
                 px - 6,  py + 11.0, # Port winglet fin
                 px - 4,  py + 12.0, # Port swept wingtip
                 px + 3,  py + 3.0,  # Forward wing root
-                px + 7,  py + 2.5,  # Cockpit
-                px + 13, py + 0.5   # Nose cone bottom
+                px + 8,  py + 2.5,  # Cockpit
+                px + 14, py + 0.5   # Nose cone bottom
             ]
             self.create_polygon(poly_points, fill=jet_body, outline=wing_accent, width=1.2)
 
             # Twin Underwing Turbofan Engines
-            self.create_rectangle(px - 3, py - 7, px + 3, py - 4.5, fill="#38BDF8", outline="#FFFFFF")
-            self.create_rectangle(px - 3, py + 4.5, px + 3, py + 7, fill="#38BDF8", outline="#FFFFFF")
+            self.create_rectangle(px - 3, py - 7.5, px + 3, py - 4.5, fill="#38BDF8", outline="#FFFFFF")
+            self.create_rectangle(px - 3, py + 4.5, px + 3, py + 7.5, fill="#38BDF8", outline="#FFFFFF")
 
             # Cockpit Windshield Glint
-            self.create_oval(px + 5, py - 2, px + 9, py + 0.5, fill="#7DD3FC", outline="")
+            self.create_oval(px + 6, py - 2, px + 10, py + 0.5, fill="#7DD3FC", outline="")
 
         # 6. Flight Telemetry Label
         if self.telemetry:
@@ -960,21 +961,21 @@ class AeroplaneCurveCanvas(tk.Canvas):
 
 
 # ==============================================================================
-# Main P2Pwire Desktop App (2 Tabs + Transfer History)
+# Main P2Pwire Desktop App (3 Distinct Tabs + Unified Progress Bar + Clean Layout)
 # ==============================================================================
 class P2PwireDesktopApp:
     def __init__(self, root):
         self.root = root
         self.root.title("P2Pwire Turbo Hub 3.0 (Dual-Rail Link Aggregation)")
-        self.root.geometry("920x760")
-        self.root.minsize(820, 640)
+        self.root.geometry("960x780")
+        self.root.minsize(860, 680)
         self.root.configure(bg=COLOR_BG)
 
         self.local_ips = get_all_local_ips()
         self.phone_ips = []
         self.audio_streamer = None
         self.file_sender = None
-        self.current_tab = "files"  # "files" or "sound"
+        self.current_tab = "files"  # "files", "sound", or "diagnostics"
         self.history_items = []
 
         self._load_history()
@@ -1058,9 +1059,9 @@ class P2PwireDesktopApp:
         btn_rescan = tk.Button(ip_bar, text="🔄 Auto-Detect", font=("Segoe UI", 8, "bold"), bg=COLOR_SURFACE, fg=COLOR_TEXT, activebackground=COLOR_ACCENT, relief=tk.FLAT, padx=10, command=self._rescan_peers)
         btn_rescan.pack(side=tk.RIGHT)
 
-        # 3. Two-Tab Navigation Bar (Custom Modern Segmented Control)
+        # 3. Three-Tab Navigation Bar (Custom Modern Segmented Control)
         tab_bar = tk.Frame(self.root, bg=COLOR_BG)
-        tab_bar.pack(fill=tk.X, padx=14, pady=(8, 2))
+        tab_bar.pack(fill=tk.X, padx=14, pady=(8, 4))
 
         self.btn_tab_files = tk.Button(
             tab_bar, text="⚡ File Transfer & History", font=("Segoe UI", 10, "bold"),
@@ -1074,7 +1075,14 @@ class P2PwireDesktopApp:
             bg=COLOR_SURFACE, fg=COLOR_TEXT_MUTED, activebackground=COLOR_SURFACE,
             relief=tk.FLAT, padx=18, pady=8, bd=0, command=lambda: self.switch_tab("sound")
         )
-        self.btn_tab_sound.pack(side=tk.LEFT)
+        self.btn_tab_sound.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.btn_tab_diag = tk.Button(
+            tab_bar, text="📋 Real-Time Hub Diagnostics", font=("Segoe UI", 10, "bold"),
+            bg=COLOR_SURFACE, fg=COLOR_TEXT_MUTED, activebackground=COLOR_SURFACE,
+            relief=tk.FLAT, padx=18, pady=8, bd=0, command=lambda: self.switch_tab("diagnostics")
+        )
+        self.btn_tab_diag.pack(side=tk.LEFT)
 
         # 4. Tab Content Container
         self.tab_container = tk.Frame(self.root, bg=COLOR_BG)
@@ -1082,102 +1090,100 @@ class P2PwireDesktopApp:
 
         self._build_tab_files()
         self._build_tab_sound()
+        self._build_tab_diagnostics()
         self.switch_tab("files")
 
-        # 5. Bottom Log Console (Collapsible)
-        bottom_frame = tk.Frame(self.root, bg=COLOR_SURFACE, highlightthickness=1, highlightbackground=COLOR_BORDER)
-        bottom_frame.pack(fill=tk.X, padx=14, pady=(4, 10))
-
-        log_header = tk.Frame(bottom_frame, bg=COLOR_SURFACE, padx=8, pady=4)
-        log_header.pack(fill=tk.X)
-        tk.Label(log_header, text="📋 Real-Time Hub Diagnostics", font=("Segoe UI", 8, "bold"), fg=COLOR_TEXT_MUTED, bg=COLOR_SURFACE).pack(side=tk.LEFT)
-
-        self.log_text = tk.Text(bottom_frame, height=4, bg=COLOR_SURFACE_ALT, fg=COLOR_TEXT, font=("Consolas", 8), wrap=tk.WORD, bd=0, relief=tk.FLAT)
-        self.log_text.pack(fill=tk.X, padx=8, pady=(0, 6))
-
-        self.log_text.tag_config("cyan", foreground=COLOR_ACCENT)
-        self.log_text.tag_config("green", foreground=COLOR_SUCCESS)
-        self.log_text.tag_config("yellow", foreground=COLOR_WARNING)
-        self.log_text.tag_config("red", foreground=COLOR_DANGER)
-        self.log_text.tag_config("white", foreground=COLOR_TEXT)
-
     # --------------------------------------------------------------------------
-    # TAB 1: FILE TRANSFER & HISTORY
+    # TAB 1: UNIFIED FILE TRANSFER & HISTORY
     # --------------------------------------------------------------------------
     def _build_tab_files(self):
         self.frame_files = tk.Frame(self.tab_container, bg=COLOR_BG)
 
-        # Dual Action Cards (Outgoing Blast + Incoming Receiver)
-        transfer_cards = tk.Frame(self.frame_files, bg=COLOR_BG)
-        transfer_cards.pack(fill=tk.X, pady=(0, 6))
-
-        # Card A: Outgoing Turbo Blast
-        send_card = tk.LabelFrame(
-            transfer_cards, text=" 🚀 Outgoing Turbo Blast (PC ➡️ Phone) ",
-            font=("Segoe UI", 9, "bold"), fg=COLOR_ACCENT, bg=COLOR_SURFACE,
-            relief=tk.FLAT, bd=1, highlightthickness=1, highlightbackground=COLOR_BORDER, padx=12, pady=8
+        # ======================================================================
+        # SINGLE UNIFIED SUPERSONIC TRANSFER CARD (Sent & Received Combined)
+        # ======================================================================
+        transfer_card = tk.LabelFrame(
+            self.frame_files, text=" ⚡ Supersonic File Transfer Engine (Bidirectional Dual-Rail Link) ",
+            font=("Segoe UI", 10, "bold"), fg=COLOR_ACCENT, bg=COLOR_SURFACE,
+            relief=tk.FLAT, bd=1, highlightthickness=1, highlightbackground=COLOR_BORDER, padx=16, pady=12
         )
-        send_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        transfer_card.pack(fill=tk.X, pady=(0, 8))
 
-        send_top = tk.Frame(send_card, bg=COLOR_SURFACE)
-        send_top.pack(fill=tk.X, pady=(0, 4))
-        self.speed_label = tk.Label(send_top, text="Speed: 0.0 MB/s (Idle)", font=("Consolas", 9, "bold"), fg=COLOR_ACCENT, bg=COLOR_SURFACE)
-        self.speed_label.pack(side=tk.LEFT)
-        self.rail_telemetry_label = tk.Label(send_top, text="Pipes: Idle", font=("Consolas", 8), fg=COLOR_TEXT_MUTED, bg=COLOR_SURFACE)
-        self.rail_telemetry_label.pack(side=tk.RIGHT)
+        # Top Status & Telemetry Row
+        telemetry_top = tk.Frame(transfer_card, bg=COLOR_SURFACE)
+        telemetry_top.pack(fill=tk.X, pady=(0, 6))
 
-        self.send_flight_canvas = AeroplaneCurveCanvas(send_card, height=56)
-        self.send_flight_canvas.pack(fill=tk.X, pady=4)
+        self.unified_status_label = tk.Label(
+            telemetry_top, text="⚡ Ready for Transfer (Bidirectional: PC 🔁 Phone)",
+            font=("Segoe UI", 9, "bold"), fg=COLOR_TEXT, bg=COLOR_SURFACE
+        )
+        self.unified_status_label.pack(side=tk.LEFT)
 
-        send_btns = tk.Frame(send_card, bg=COLOR_SURFACE)
-        send_btns.pack(fill=tk.X, pady=(6, 0))
+        self.unified_rail_label = tk.Label(
+            telemetry_top, text="Pipes: Idle",
+            font=("Consolas", 8, "bold"), fg=COLOR_TEXT_MUTED, bg=COLOR_SURFACE
+        )
+        self.unified_rail_label.pack(side=tk.RIGHT)
+
+        self.unified_speed_label = tk.Label(
+            telemetry_top, text="Speed: 0.0 MB/s",
+            font=("Consolas", 9, "bold"), fg=COLOR_ACCENT, bg=COLOR_SURFACE
+        )
+        self.unified_speed_label.pack(side=tk.RIGHT, padx=(0, 16))
+
+        # Unified Aeroplane Canvas (Solid Runway & Clean Neon Contrail)
+        self.unified_flight_canvas = AeroplaneCurveCanvas(transfer_card, height=64)
+        self.unified_flight_canvas.pack(fill=tk.X, pady=4)
+
+        # Action Buttons Row
+        action_row = tk.Frame(transfer_card, bg=COLOR_SURFACE)
+        action_row.pack(fill=tk.X, pady=(8, 0))
+
         btn_send = tk.Button(
-            send_btns, text="📁 Blast File to Phone (Dual-Rail)", font=("Segoe UI", 9, "bold"),
-            bg=COLOR_ACCENT, fg="#FFFFFF", activebackground=COLOR_ACCENT_HOVER, relief=tk.FLAT, pady=6,
+            action_row, text="📁 Blast File to Phone (Dual-Rail)", font=("Segoe UI", 9, "bold"),
+            bg=COLOR_ACCENT, fg="#FFFFFF", activebackground=COLOR_ACCENT_HOVER, relief=tk.FLAT, pady=7, padx=16,
             command=self.send_file_dialog
         )
-        btn_send.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        btn_send.pack(side=tk.LEFT, padx=(0, 8))
+
         btn_cancel = tk.Button(
-            send_btns, text="⏹ Cancel", font=("Segoe UI", 8, "bold"),
-            bg=COLOR_SURFACE_ALT, fg=COLOR_DANGER, activebackground="#334155", relief=tk.FLAT, pady=6, padx=10,
+            action_row, text="⏹ Cancel Transfer", font=("Segoe UI", 9, "bold"),
+            bg=COLOR_SURFACE_ALT, fg=COLOR_DANGER, activebackground="#334155", relief=tk.FLAT, pady=7, padx=14,
             command=self.cancel_send
         )
-        btn_cancel.pack(side=tk.RIGHT)
+        btn_cancel.pack(side=tk.LEFT, padx=(0, 8))
 
-        # Card B: Incoming File Receiver
-        recv_card = tk.LabelFrame(
-            transfer_cards, text=" 📥 Incoming File Receiver (Phone ➡️ PC) ",
-            font=("Segoe UI", 9, "bold"), fg=COLOR_SUCCESS, bg=COLOR_SURFACE,
-            relief=tk.FLAT, bd=1, highlightthickness=1, highlightbackground=COLOR_BORDER, padx=12, pady=8
-        )
-        recv_card.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
-
-        recv_top = tk.Frame(recv_card, bg=COLOR_SURFACE)
-        recv_top.pack(fill=tk.X, pady=(0, 4))
-        self.received_label = tk.Label(recv_top, text="Port 8082 Ready • Listening", font=("Segoe UI", 8, "bold"), fg=COLOR_SUCCESS, bg=COLOR_SURFACE)
-        self.received_label.pack(side=tk.LEFT)
         btn_folder = tk.Button(
-            recv_top, text="📂 Open Downloads", font=("Segoe UI", 8, "bold"),
-            bg=COLOR_SURFACE_ALT, fg=COLOR_TEXT, activebackground="#334155", relief=tk.FLAT, padx=8, pady=2,
+            action_row, text="📂 Open Downloads Folder", font=("Segoe UI", 9, "bold"),
+            bg=COLOR_SURFACE_ALT, fg=COLOR_TEXT, activebackground="#334155", relief=tk.FLAT, pady=7, padx=14,
             command=self.open_downloads_folder
         )
-        btn_folder.pack(side=tk.RIGHT)
+        btn_folder.pack(side=tk.LEFT)
 
-        self.recv_flight_canvas = AeroplaneCurveCanvas(recv_card, height=56)
-        self.recv_flight_canvas.pack(fill=tk.X, pady=4)
+        # Transfer Mode Pill on Right
+        self.mode_pill = tk.Label(
+            action_row, text="LISTENING ON PORT 8082",
+            font=("Consolas", 8, "bold"), fg=COLOR_SUCCESS, bg=COLOR_SURFACE_ALT, padx=10, pady=5,
+            highlightthickness=1, highlightbackground=COLOR_BORDER
+        )
+        self.mode_pill.pack(side=tk.RIGHT)
 
-        # ----------------------------------------------------------------------
-        # Transfer History Panel (Sent & Received Table)
-        # ----------------------------------------------------------------------
+        # ======================================================================
+        # TRANSFER HISTORY PANEL (Cleanly Arranged Table & Action Toolbar)
+        # ======================================================================
         history_frame = tk.LabelFrame(
             self.frame_files, text=" 📜 Transfer History (Sent & Received Files) ",
-            font=("Segoe UI", 9, "bold"), fg=COLOR_TEXT, bg=COLOR_SURFACE,
-            relief=tk.FLAT, bd=1, highlightthickness=1, highlightbackground=COLOR_BORDER, padx=10, pady=8
+            font=("Segoe UI", 10, "bold"), fg=COLOR_TEXT, bg=COLOR_SURFACE,
+            relief=tk.FLAT, bd=1, highlightthickness=1, highlightbackground=COLOR_BORDER, padx=14, pady=10
         )
-        history_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+        history_frame.pack(fill=tk.BOTH, expand=True, pady=(2, 0))
+
+        # Treeview Table
+        tree_container = tk.Frame(history_frame, bg=COLOR_SURFACE)
+        tree_container.pack(fill=tk.BOTH, expand=True)
 
         columns = ("time", "type", "name", "size", "speed", "status")
-        self.history_tree = ttk.Treeview(history_frame, columns=columns, show="headings", height=7)
+        self.history_tree = ttk.Treeview(tree_container, columns=columns, show="headings", height=8)
         self.history_tree.heading("time", text="Time")
         self.history_tree.heading("type", text="Type")
         self.history_tree.heading("name", text="File Name")
@@ -1185,43 +1191,50 @@ class P2PwireDesktopApp:
         self.history_tree.heading("speed", text="Avg Speed")
         self.history_tree.heading("status", text="Status")
 
-        self.history_tree.column("time", width=80, anchor="center")
-        self.history_tree.column("type", width=75, anchor="center")
-        self.history_tree.column("name", width=340, anchor="w")
-        self.history_tree.column("size", width=95, anchor="center")
-        self.history_tree.column("speed", width=105, anchor="center")
-        self.history_tree.column("status", width=95, anchor="center")
+        self.history_tree.column("time", width=85, anchor="center")
+        self.history_tree.column("type", width=80, anchor="center")
+        self.history_tree.column("name", width=380, anchor="w")
+        self.history_tree.column("size", width=100, anchor="center")
+        self.history_tree.column("speed", width=110, anchor="center")
+        self.history_tree.column("status", width=100, anchor="center")
 
-        tree_scroll = ttk.Scrollbar(history_frame, orient=tk.VERTICAL, command=self.history_tree.yview)
+        tree_scroll = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.history_tree.yview)
         self.history_tree.configure(yscrollcommand=tree_scroll.set)
         self.history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.history_tree.bind("<Double-1>", lambda e: self.open_selected_history_file())
 
+        # Clean Action Bar Below History Table
         history_btn_bar = tk.Frame(history_frame, bg=COLOR_SURFACE)
-        history_btn_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
+        history_btn_bar.pack(fill=tk.X, pady=(10, 0))
 
-        btn_open_file = tk.Button(
-            history_btn_bar, text="📄 Open File", font=("Segoe UI", 8, "bold"),
-            bg=COLOR_SURFACE_ALT, fg=COLOR_TEXT, activebackground="#334155", relief=tk.FLAT, padx=10, pady=3,
-            command=self.open_selected_history_file
+        hint_label = tk.Label(
+            history_btn_bar, text="💡 Tip: Double-click any row to open file directly",
+            font=("Segoe UI", 8), fg=COLOR_TEXT_MUTED, bg=COLOR_SURFACE
         )
-        btn_open_file.pack(side=tk.LEFT, padx=(0, 6))
-
-        btn_open_dir = tk.Button(
-            history_btn_bar, text="📁 Open Folder", font=("Segoe UI", 8, "bold"),
-            bg=COLOR_SURFACE_ALT, fg=COLOR_TEXT, activebackground="#334155", relief=tk.FLAT, padx=10, pady=3,
-            command=self.open_selected_history_folder
-        )
-        btn_open_dir.pack(side=tk.LEFT, padx=(0, 6))
+        hint_label.pack(side=tk.LEFT)
 
         btn_clear = tk.Button(
-            history_btn_bar, text="🗑 Clear History", font=("Segoe UI", 8, "bold"),
-            bg=COLOR_SURFACE_ALT, fg=COLOR_DANGER, activebackground="#334155", relief=tk.FLAT, padx=10, pady=3,
+            history_btn_bar, text="🗑 Clear History", font=("Segoe UI", 9, "bold"),
+            bg=COLOR_SURFACE_ALT, fg=COLOR_DANGER, activebackground="#334155", relief=tk.FLAT, padx=14, pady=5,
             command=self.clear_history
         )
         btn_clear.pack(side=tk.RIGHT)
+
+        btn_open_dir = tk.Button(
+            history_btn_bar, text="📁 Open Folder", font=("Segoe UI", 9, "bold"),
+            bg=COLOR_SURFACE_ALT, fg=COLOR_TEXT, activebackground="#334155", relief=tk.FLAT, padx=14, pady=5,
+            command=self.open_selected_history_folder
+        )
+        btn_open_dir.pack(side=tk.RIGHT, padx=(0, 8))
+
+        btn_open_file = tk.Button(
+            history_btn_bar, text="📄 Open File", font=("Segoe UI", 9, "bold"),
+            bg=COLOR_ACCENT, fg="#FFFFFF", activebackground=COLOR_ACCENT_HOVER, relief=tk.FLAT, padx=16, pady=5,
+            command=self.open_selected_history_file
+        )
+        btn_open_file.pack(side=tk.RIGHT, padx=(0, 8))
 
         self._render_history_tree()
 
@@ -1235,20 +1248,20 @@ class P2PwireDesktopApp:
         pc_sound_card = tk.LabelFrame(
             self.frame_sound, text=" 🔊 Stream PC Sound to Phone (10ms Lip-Sync) ",
             font=("Segoe UI", 10, "bold"), fg=COLOR_ACCENT, bg=COLOR_SURFACE,
-            relief=tk.FLAT, bd=1, highlightthickness=1, highlightbackground=COLOR_BORDER, padx=16, pady=16
+            relief=tk.FLAT, bd=1, highlightthickness=1, highlightbackground=COLOR_BORDER, padx=18, pady=18
         )
-        pc_sound_card.pack(fill=tk.X, pady=(0, 10))
+        pc_sound_card.pack(fill=tk.X, pady=(0, 12))
 
         tk.Label(
             pc_sound_card,
             text="Turns your Android phone into an ultra-low-latency wireless PC speaker (Dedicated Port 8080).",
             font=("Segoe UI", 9), fg=COLOR_TEXT_MUTED, bg=COLOR_SURFACE
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(anchor="w", pady=(0, 10))
 
         vu_frame = tk.Frame(pc_sound_card, bg=COLOR_SURFACE)
         vu_frame.pack(fill=tk.X, pady=6)
         tk.Label(vu_frame, text="Live Output VU Meter:", font=("Segoe UI", 9, "bold"), fg=COLOR_TEXT, bg=COLOR_SURFACE).pack(side=tk.LEFT, padx=(0, 10))
-        self.vu_bar = ttk.Progressbar(vu_frame, length=240, mode="determinate")
+        self.vu_bar = ttk.Progressbar(vu_frame, length=260, mode="determinate")
         self.vu_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self.btn_audio = tk.Button(
@@ -1262,37 +1275,117 @@ class P2PwireDesktopApp:
         phone_recv_card = tk.LabelFrame(
             self.frame_sound, text=" 📥 Receive Phone Sound to PC Speakers ",
             font=("Segoe UI", 10, "bold"), fg=COLOR_SUCCESS, bg=COLOR_SURFACE,
-            relief=tk.FLAT, bd=1, highlightthickness=1, highlightbackground=COLOR_BORDER, padx=16, pady=16
+            relief=tk.FLAT, bd=1, highlightthickness=1, highlightbackground=COLOR_BORDER, padx=18, pady=18
         )
-        phone_recv_card.pack(fill=tk.X, pady=(0, 10))
+        phone_recv_card.pack(fill=tk.X, pady=(0, 12))
 
         tk.Label(
             phone_recv_card,
             text="Port 8080 background server is active. Any sound streamed from the Android app will play automatically through your PC speakers.",
-            font=("Segoe UI", 9), fg=COLOR_TEXT_MUTED, bg=COLOR_SURFACE, wraplength=760, justify=tk.LEFT
+            font=("Segoe UI", 9), fg=COLOR_TEXT_MUTED, bg=COLOR_SURFACE, wraplength=780, justify=tk.LEFT
         ).pack(anchor="w")
 
         status_pill = tk.Label(
             phone_recv_card, text="✓ Server Ready: Listening on 0.0.0.0:8080",
-            font=("Consolas", 9, "bold"), fg=COLOR_SUCCESS, bg=COLOR_SURFACE_ALT, padx=10, pady=4
+            font=("Consolas", 9, "bold"), fg=COLOR_SUCCESS, bg=COLOR_SURFACE_ALT, padx=12, pady=5,
+            highlightthickness=1, highlightbackground=COLOR_BORDER
         )
-        status_pill.pack(anchor="w", pady=(10, 0))
+        status_pill.pack(anchor="w", pady=(12, 0))
+
+    # --------------------------------------------------------------------------
+    # TAB 3: DEDICATED REAL-TIME HUB DIAGNOSTICS & NETWORK
+    # --------------------------------------------------------------------------
+    def _build_tab_diagnostics(self):
+        self.frame_diag = tk.Frame(self.tab_container, bg=COLOR_BG)
+
+        # Overview Status Cards
+        overview_card = tk.LabelFrame(
+            self.frame_diag, text=" 🌐 Hub Network & Interface Architecture ",
+            font=("Segoe UI", 10, "bold"), fg=COLOR_ACCENT, bg=COLOR_SURFACE,
+            relief=tk.FLAT, bd=1, highlightthickness=1, highlightbackground=COLOR_BORDER, padx=14, pady=10
+        )
+        overview_card.pack(fill=tk.X, pady=(0, 8))
+
+        diag_grid = tk.Frame(overview_card, bg=COLOR_SURFACE)
+        diag_grid.pack(fill=tk.X)
+
+        self.diag_interfaces_label = tk.Label(
+            diag_grid, text=f"Local PC Interfaces: {', '.join(self.local_ips)}",
+            font=("Consolas", 9), fg=COLOR_TEXT, bg=COLOR_SURFACE, anchor="w"
+        )
+        self.diag_interfaces_label.pack(fill=tk.X, pady=2)
+
+        self.diag_ports_label = tk.Label(
+            diag_grid, text="Engine Ports: Port 8080 (Audio Lip-Sync) | Port 8082 (HBSP Dual-Rail Files) | Port 8089 (UDP Mesh)",
+            font=("Consolas", 8), fg=COLOR_SUCCESS, bg=COLOR_SURFACE, anchor="w"
+        )
+        self.diag_ports_label.pack(fill=tk.X, pady=2)
+
+        # Terminal Console
+        console_frame = tk.LabelFrame(
+            self.frame_diag, text=" 📋 Real-Time Diagnostic Stream ",
+            font=("Segoe UI", 10, "bold"), fg=COLOR_TEXT, bg=COLOR_SURFACE,
+            relief=tk.FLAT, bd=1, highlightthickness=1, highlightbackground=COLOR_BORDER, padx=12, pady=10
+        )
+        console_frame.pack(fill=tk.BOTH, expand=True)
+
+        toolbar = tk.Frame(console_frame, bg=COLOR_SURFACE)
+        toolbar.pack(fill=tk.X, pady=(0, 6))
+
+        btn_probe = tk.Button(
+            toolbar, text="🔄 Re-Probe Network", font=("Segoe UI", 8, "bold"),
+            bg=COLOR_SURFACE_ALT, fg=COLOR_ACCENT, activebackground="#334155", relief=tk.FLAT, padx=10, pady=3,
+            command=self._rescan_peers
+        )
+        btn_probe.pack(side=tk.LEFT, padx=(0, 6))
+
+        btn_clear_log = tk.Button(
+            toolbar, text="🗑 Clear Log", font=("Segoe UI", 8, "bold"),
+            bg=COLOR_SURFACE_ALT, fg=COLOR_TEXT_MUTED, activebackground="#334155", relief=tk.FLAT, padx=10, pady=3,
+            command=self.clear_diagnostics_log
+        )
+        btn_clear_log.pack(side=tk.LEFT)
+
+        log_scroll = ttk.Scrollbar(console_frame, orient=tk.VERTICAL)
+        self.log_text = tk.Text(
+            console_frame, bg=COLOR_SURFACE_ALT, fg=COLOR_TEXT, font=("Consolas", 9),
+            wrap=tk.WORD, bd=0, relief=tk.FLAT, yscrollcommand=log_scroll.set
+        )
+        log_scroll.config(command=self.log_text.yview)
+
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.log_text.tag_config("cyan", foreground=COLOR_ACCENT)
+        self.log_text.tag_config("green", foreground=COLOR_SUCCESS)
+        self.log_text.tag_config("yellow", foreground=COLOR_WARNING)
+        self.log_text.tag_config("red", foreground=COLOR_DANGER)
+        self.log_text.tag_config("white", foreground=COLOR_TEXT)
 
     # --------------------------------------------------------------------------
     # Tab Switching Logic
     # --------------------------------------------------------------------------
     def switch_tab(self, tab_id):
         self.current_tab = tab_id
+        # Hide all
+        self.frame_files.pack_forget()
+        self.frame_sound.pack_forget()
+        self.frame_diag.pack_forget()
+
+        # Reset button styles
+        self.btn_tab_files.config(bg=COLOR_SURFACE, fg=COLOR_TEXT_MUTED)
+        self.btn_tab_sound.config(bg=COLOR_SURFACE, fg=COLOR_TEXT_MUTED)
+        self.btn_tab_diag.config(bg=COLOR_SURFACE, fg=COLOR_TEXT_MUTED)
+
         if tab_id == "files":
-            self.frame_sound.pack_forget()
             self.frame_files.pack(fill=tk.BOTH, expand=True)
             self.btn_tab_files.config(bg=COLOR_ACCENT_HOVER, fg="#FFFFFF")
-            self.btn_tab_sound.config(bg=COLOR_SURFACE, fg=COLOR_TEXT_MUTED)
-        else:
-            self.frame_files.pack_forget()
+        elif tab_id == "sound":
             self.frame_sound.pack(fill=tk.BOTH, expand=True)
             self.btn_tab_sound.config(bg=COLOR_ACCENT_HOVER, fg="#FFFFFF")
-            self.btn_tab_files.config(bg=COLOR_SURFACE, fg=COLOR_TEXT_MUTED)
+        elif tab_id == "diagnostics":
+            self.frame_diag.pack(fill=tk.BOTH, expand=True)
+            self.btn_tab_diag.config(bg=COLOR_ACCENT_HOVER, fg="#FFFFFF")
 
     # --------------------------------------------------------------------------
     # Transfer History Storage & Actions
@@ -1340,6 +1433,7 @@ class P2PwireDesktopApp:
     def open_selected_history_file(self):
         selected = self.history_tree.selection()
         if not selected:
+            messagebox.showinfo("Select File", "Please click on a row in the history table first.")
             return
         idx = self.history_tree.index(selected[0])
         if idx < len(self.history_items):
@@ -1377,15 +1471,22 @@ class P2PwireDesktopApp:
                 self.log(f"[ERROR] Could not open folder: {e}", "red")
 
     def clear_history(self):
-        self.history_items = []
-        self._save_history()
-        self._render_history_tree()
+        if messagebox.askyesno("Clear History", "Do you want to clear all file transfer history?"):
+            self.history_items = []
+            self._save_history()
+            self._render_history_tree()
+
+    def clear_diagnostics_log(self):
+        self.log_text.delete("1.0", tk.END)
 
     # --------------------------------------------------------------------------
     # Discovery & Network Helpers
     # --------------------------------------------------------------------------
     def _rescan_peers(self):
         self.log("[SCAN] Re-probing network for Android peer...", "cyan")
+        self.local_ips = get_all_local_ips()
+        if hasattr(self, 'diag_interfaces_label'):
+            self.diag_interfaces_label.config(text=f"Local PC Interfaces: {', '.join(self.local_ips)}")
         threading.Thread(target=self.discovery._broadcast_pc_beacon, daemon=True).start()
         threading.Thread(target=self.discovery._active_multirail_scanner, daemon=True).start()
 
@@ -1418,10 +1519,13 @@ class P2PwireDesktopApp:
 
     def _on_file_received_from_phone(self, filename, filepath, total_bytes, mbps):
         self.add_history_entry("RECV", filename, total_bytes, f"{mbps:.1f} MB/s", "COMPLETED", filepath)
-        self.root.after(0, lambda: self._update_received_file_ui(filename, filepath))
+        self.root.after(0, lambda: self._update_received_file_ui(filename, filepath, total_bytes, mbps))
 
-    def _update_received_file_ui(self, filename, filepath):
-        self.received_label.config(text=f"✓ Received '{filename}' into Downloads!", fg=COLOR_SUCCESS)
+    def _update_received_file_ui(self, filename, filepath, total_bytes, mbps):
+        self.unified_status_label.config(text=f"✓ Received '{filename}' ({total_bytes / (1024*1024):.1f} MB) into Downloads!", fg=COLOR_SUCCESS)
+        self.unified_flight_canvas.set_progress(1.0, f"✈ Recv: {mbps:.1f} MB/s")
+        self.unified_speed_label.config(text=f"Speed: {mbps:.1f} MB/s", fg=COLOR_SUCCESS)
+        self.mode_pill.config(text="TRANSFER COMPLETED", fg=COLOR_SUCCESS)
 
     def open_downloads_folder(self):
         try:
@@ -1472,6 +1576,7 @@ class P2PwireDesktopApp:
         path = filedialog.askopenfilename()
         if not path:
             return
+        self.mode_pill.config(text="BLASTING ACTIVE", fg=COLOR_ACCENT)
         self.file_sender = TurboFileSender(
             self.phone_ips, port=HBSP_FILE_PORT,
             log_callback=self.log,
@@ -1483,8 +1588,10 @@ class P2PwireDesktopApp:
     def cancel_send(self):
         if self.file_sender:
             self.file_sender.cancel()
-            self.send_flight_canvas.set_progress(0.0, "TRANSFER CANCELLED", is_cancelled=True)
-            self.speed_label.config(text="Status: Transfer Cancelled", fg=COLOR_DANGER)
+            self.unified_flight_canvas.set_progress(0.0, "TRANSFER CANCELLED", is_cancelled=True)
+            self.unified_status_label.config(text="Status: Transfer Cancelled", fg=COLOR_DANGER)
+            self.unified_speed_label.config(text="Speed: 0.0 MB/s", fg=COLOR_DANGER)
+            self.mode_pill.config(text="TRANSFER CANCELLED", fg=COLOR_DANGER)
 
     def _on_send_completed(self, filename, file_size, avg_speed, status, file_path):
         self.add_history_entry("SENT", filename, file_size, f"{avg_speed:.1f} MB/s", status, file_path)
@@ -1496,31 +1603,45 @@ class P2PwireDesktopApp:
         frac = (written / total) if total > 0 else 0.0
         pct = int(frac * 100)
         telemetry = f"✈ Recv: {mbps:.1f} MB/s ({written / (1024*1024):.1f}/{total / (1024*1024):.1f} MB • {pct}%)"
-        self.recv_flight_canvas.set_progress(frac, telemetry)
+        self.unified_flight_canvas.set_progress(frac, telemetry)
+        self.unified_speed_label.config(text=f"Speed: {mbps:.1f} MB/s", fg=COLOR_SUCCESS)
         if frac >= 1.0:
-            self.received_label.config(text=f"✓ Received '{filename}' ({total / (1024*1024):.1f} MB) saved!", fg=COLOR_SUCCESS)
+            self.unified_status_label.config(text=f"✓ Received '{filename}' into Downloads!", fg=COLOR_SUCCESS)
+            self.mode_pill.config(text="PORT 8082 READY", fg=COLOR_SUCCESS)
         else:
-            self.received_label.config(text=f"📥 Receiving '{filename}' • ETA: ~{eta}s", fg=COLOR_ACCENT)
+            self.unified_status_label.config(text=f"📥 Receiving: '{filename}' • ETA: ~{eta}s", fg=COLOR_SUCCESS)
+            self.mode_pill.config(text="RECEIVING FILE", fg=COLOR_SUCCESS)
 
-    def _update_progress(self, sent, total, mbps, gbps, pipes, rail_speeds, is_cancelled=False):
-        self.root.after(0, lambda: self._render_progress_ui(sent, total, mbps, gbps, pipes, rail_speeds, is_cancelled))
+    def _update_progress(self, sent, total, mbps, gbps, pipes, rail_speeds, is_cancelled=False, file_name=""):
+        self.root.after(0, lambda: self._render_progress_ui(sent, total, mbps, gbps, pipes, rail_speeds, is_cancelled, file_name))
 
-    def _render_progress_ui(self, sent, total, mbps, gbps, pipes, rail_speeds, is_cancelled=False):
+    def _render_progress_ui(self, sent, total, mbps, gbps, pipes, rail_speeds, is_cancelled=False, file_name=""):
         if is_cancelled:
-            self.send_flight_canvas.set_progress(0.0, "TRANSFER CANCELLED", is_cancelled=True)
-            self.speed_label.config(text="Status: Transfer Cancelled", fg=COLOR_DANGER)
+            self.unified_flight_canvas.set_progress(0.0, "TRANSFER CANCELLED", is_cancelled=True)
+            self.unified_status_label.config(text="Status: Transfer Cancelled", fg=COLOR_DANGER)
+            self.unified_speed_label.config(text="Speed: 0.0 MB/s", fg=COLOR_DANGER)
+            self.mode_pill.config(text="TRANSFER CANCELLED", fg=COLOR_DANGER)
             return
 
         frac = (sent / total) if total > 0 else 0.0
-        self.send_flight_canvas.set_progress(frac, f"✈ {mbps:.1f} MB/s ({pipes} Pipes)")
-        self.speed_label.config(text=f"Total: {mbps:.1f} MB/s ({gbps:.2f} Gbps) • [{pipes} Pipes]", fg=COLOR_ACCENT)
+        self.unified_flight_canvas.set_progress(frac, f"✈ {mbps:.1f} MB/s ({pipes} Pipes)")
+        self.unified_speed_label.config(text=f"Speed: {mbps:.1f} MB/s ({gbps:.2f} Gbps)", fg=COLOR_ACCENT)
+
+        if file_name:
+            if frac >= 1.0:
+                self.unified_status_label.config(text=f"✓ Blasted '{file_name}' to Phone!", fg=COLOR_SUCCESS)
+                self.mode_pill.config(text="BLAST COMPLETED", fg=COLOR_SUCCESS)
+            else:
+                pct = int(frac * 100)
+                self.unified_status_label.config(text=f"🚀 Blasting: '{file_name}' ({pct}%)", fg=COLOR_ACCENT)
+                self.mode_pill.config(text="BLASTING ACTIVE", fg=COLOR_ACCENT)
 
         parts = []
         for ip, spd in rail_speeds.items():
             tag = "USB" if "192.168.42." in ip else ("Hotspot" if "192.168.43." in ip else "Wi-Fi")
             parts.append(f"{tag}: {spd:.1f} MB/s")
         if parts:
-            self.rail_telemetry_label.config(text=" | ".join(parts), fg=COLOR_SUCCESS if len(parts) >= 2 else COLOR_TEXT_MUTED)
+            self.unified_rail_label.config(text=f"[{pipes}P] " + " | ".join(parts), fg=COLOR_SUCCESS if len(parts) >= 2 else COLOR_TEXT_MUTED)
 
     def _start_vu_meter_timer(self):
         if self.audio_streamer and self.audio_streamer.running:
