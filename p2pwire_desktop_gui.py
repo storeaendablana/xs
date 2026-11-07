@@ -60,6 +60,7 @@ FLAG_ZSTD = 0x01
 FLAG_FILE = 0x08
 FLAG_EOF = 0x20
 FLAG_META = 0x40
+FLAG_RESUME = 0x80
 
 INCOMPRESSIBLE_EXTS = {
     '.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
@@ -154,20 +155,99 @@ def find_matching_local_ip(target_ip, local_ips):
 
 
 # ==============================================================================
-# Zero-Config Multi-Rail Discovery Engine
+# RFC 5389 STUN NAT & Carrier-Grade NAT (CGNAT) Diagnostic Engine
+# ==============================================================================
+def query_stun_nat(server="stun.l.google.com", port=19302):
+    """RFC 5389 STUN Binding Request in pure Python to detect Public Reflexive IP and external port."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(2.5)
+        # 20-byte STUN Binding Request Header
+        # Type: 0x0001 (Binding Request), Length: 0x0000, Magic Cookie: 0x2112A442
+        tx_id = os.urandom(12)
+        header = struct.pack("!HHI12s", 0x0001, 0x0000, 0x2112A442, tx_id)
+        s.sendto(header, (server, port))
+        data, _ = s.recvfrom(512)
+        s.close()
+
+        if len(data) < 20:
+            return None
+        msg_type, msg_len, cookie = struct.unpack("!HHI", data[:8])
+        if msg_type != 0x0101 or cookie != 0x2112A442:
+            return None
+
+        offset = 20
+        while offset + 4 <= len(data):
+            attr_type, attr_len = struct.unpack("!HH", data[offset:offset+4])
+            offset += 4
+            if offset + attr_len > len(data):
+                break
+            if attr_type == 0x0020 and attr_len >= 8: # XOR-MAPPED-ADDRESS
+                _, family, xport = struct.unpack("!BBH", data[offset:offset+4])
+                if family == 0x01: # IPv4
+                    port_val = xport ^ 0x2112
+                    xip = struct.unpack("!I", data[offset+4:offset+8])[0]
+                    ip_int = xip ^ 0x2112A442
+                    ip_str = socket.inet_ntoa(struct.pack("!I", ip_int))
+                    return (ip_str, port_val)
+            elif attr_type == 0x0001 and attr_len >= 8: # MAPPED-ADDRESS
+                _, family, port_val = struct.unpack("!BBH", data[offset:offset+4])
+                if family == 0x01:
+                    ip_str = socket.inet_ntoa(data[offset+4:offset+8])
+                    return (ip_str, port_val)
+            padded = (attr_len + 3) & ~3
+            offset += padded
+        return None
+    except Exception:
+        return None
+
+
+def detect_cgnat():
+    """Detects Carrier-Grade NAT (CGNAT RFC 6598) and NAT topology."""
+    res1 = query_stun_nat("stun.l.google.com", 19302)
+    res2 = query_stun_nat("stun1.l.google.com", 19302)
+    if not res1:
+        return {
+            "public_ip": None, "port": 0, "is_cgnat": False,
+            "type": "Offline / Local LAN Only",
+            "msg": "No Internet connection detected. Running in offline LAN/P2P mode."
+        }
+
+    pub_ip, p1 = res1
+    p2 = res2[1] if res2 else p1
+
+    is_cgnat = False
+    if pub_ip.startswith("100."):
+        parts = pub_ip.split(".")
+        if len(parts) == 4 and 64 <= int(parts[1]) <= 127:
+            is_cgnat = True
+    if p1 != 0 and p2 != 0 and p1 != p2:
+        is_cgnat = True # Symmetric NAT changes external port for different destinations!
+
+    nat_type = "Symmetric NAT / CGNAT (Direct WAN Blocked)" if is_cgnat else ("Cone NAT (P2P Hole-Punch Capable)" if (p1 == p2 and p1 != 0) else "Restricted NAT")
+    msg = ("⚠️ Carrier-Grade NAT (CGNAT) active. Mobile ISP drops unsolicited inbound ports. Use Hotspot or USB Tethering." if is_cgnat
+           else f"✓ Public IP: {pub_ip}:{p1} ({nat_type})")
+    return {"public_ip": pub_ip, "port": p1, "is_cgnat": is_cgnat, "type": nat_type, "msg": msg}
+
+
+# ==============================================================================
+# Zero-Config Multi-Rail Discovery Engine (with AP Isolation Bypass Sweeper)
 # ==============================================================================
 class PeerAutoDiscovery:
-    def __init__(self, local_ips, on_peer_updated_callback):
+    def __init__(self, local_ips, on_peer_updated_callback, on_ap_isolation_callback=None):
         self.local_ips = local_ips
         self.on_peer_updated = on_peer_updated_callback
+        self.on_ap_isolation = on_ap_isolation_callback
         self.running = True
         self.discovered_ips = set()
         self.lock = threading.Lock()
+        self.is_ap_isolation_detected = False
 
     def start(self):
         threading.Thread(target=self._listen_udp_beacon, daemon=True).start()
         threading.Thread(target=self._broadcast_pc_beacon, daemon=True).start()
         threading.Thread(target=self._active_multirail_scanner, daemon=True).start()
+        threading.Thread(target=self._subnet_unicast_sweeper, daemon=True).start()
 
     def _listen_udp_beacon(self):
         try:
@@ -242,15 +322,152 @@ class PeerAutoDiscovery:
                     continue
             time.sleep(1.5)
 
+    def _subnet_unicast_sweeper(self):
+        """Bypasses Router AP Isolation: Scans local /24 subnet using direct unicast probes."""
+        while self.running:
+            time.sleep(3.5)
+            if not self.discovered_ips:
+                self.local_ips = get_all_local_ips()
+                for lip in self.local_ips:
+                    parts = lip.split(".")
+                    if len(parts) == 4 and not lip.startswith("127."):
+                        prefix = f"{parts[0]}.{parts[1]}.{parts[2]}."
+                        my_last = int(parts[3])
+
+                        def probe_unicast(target_ip):
+                            try:
+                                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                s.settimeout(0.12)
+                                s.connect((target_ip, HBSP_FILE_PORT))
+                                s.close()
+                                self._register_peer_ip(target_ip)
+                                self._set_ap_isolation(False)
+                            except Exception:
+                                pass
+
+                        threads = []
+                        for host in range(1, 255):
+                            if host != my_last and not self.discovered_ips:
+                                t = threading.Thread(target=probe_unicast, args=(f"{prefix}{host}",), daemon=True)
+                                t.start()
+                                threads.append(t)
+                                if len(threads) >= 28:
+                                    for th in threads:
+                                        th.join(timeout=0.14)
+                                    threads = []
+                        for th in threads:
+                            th.join(timeout=0.14)
+
+                        # Test router gateway for AP Isolation detection
+                        if not self.discovered_ips:
+                            try:
+                                gw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                gw_sock.settimeout(0.2)
+                                gw_sock.connect((f"{prefix}1", 80))
+                                gw_sock.close()
+                                self._set_ap_isolation(True)
+                            except Exception:
+                                pass
+
+    def _set_ap_isolation(self, detected):
+        if self.is_ap_isolation_detected != detected:
+            self.is_ap_isolation_detected = detected
+            if self.on_ap_isolation:
+                self.on_ap_isolation(detected)
+
     def _register_peer_ip(self, ip):
         with self.lock:
             if ip and ip not in self.discovered_ips and ip not in self.local_ips:
                 self.discovered_ips.add(ip)
+                self._set_ap_isolation(False)
                 if self.on_peer_updated:
                     self.on_peer_updated(list(self.discovered_ips))
 
     def stop(self):
         self.running = False
+
+
+# ==============================================================================
+# Ultra-Fast Zero-Latency Stereo IMA-ADPCM Codec (4:1 Bandwidth Reduction)
+# Compresses 48kHz Stereo 16-bit PCM (1.54 Mbps) down to ~384 kbps (Zero Crackle)
+# ==============================================================================
+class ImaAdpcmCodec:
+    STEP_TABLE = [
+        7, 8, 9, 10, 11, 12, 13, 14, 16, 17,
+        19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+        50, 55, 60, 66, 73, 80, 88, 97, 107, 118,
+        130, 143, 157, 173, 190, 209, 230, 253, 279, 307,
+        337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
+        876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+        2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358,
+        5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
+        15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+    ]
+    INDEX_TABLE = [
+        -1, -1, -1, -1, 2, 4, 6, 8,
+        -1, -1, -1, -1, 2, 4, 6, 8
+    ]
+
+    def __init__(self):
+        self.pred_l = 0
+        self.idx_l = 0
+        self.pred_r = 0
+        self.idx_r = 0
+
+    def reset(self):
+        self.pred_l = 0
+        self.idx_l = 0
+        self.pred_r = 0
+        self.idx_r = 0
+
+    def encode_stereo(self, pcm_bytes):
+        num_frames = len(pcm_bytes) // 4
+        out = bytearray(num_frames)
+        step_table = self.STEP_TABLE
+        index_table = self.INDEX_TABLE
+        pred_l, idx_l = self.pred_l, self.idx_l
+        pred_r, idx_r = self.pred_r, self.idx_r
+
+        shorts = struct.unpack(f"<{num_frames * 2}h", pcm_bytes[:num_frames * 4])
+        for i in range(num_frames):
+            sL = shorts[i * 2]
+            sR = shorts[i * 2 + 1]
+
+            # Encode Left Channel (4-bit nibble)
+            stepL = step_table[idx_l]
+            diffL = sL - pred_l
+            nibL = 8 if diffL < 0 else 0
+            if diffL < 0: diffL = -diffL
+            deltaL = stepL >> 3
+            if diffL >= stepL:
+                nibL |= 4; diffL -= stepL; deltaL += stepL
+            if diffL >= (stepL >> 1):
+                nibL |= 2; diffL -= (stepL >> 1); deltaL += (stepL >> 1)
+            if diffL >= (stepL >> 2):
+                nibL |= 1; deltaL += (stepL >> 2)
+            pred_l = max(-32768, min(32767, (pred_l - deltaL) if (nibL & 8) else (pred_l + deltaL)))
+            idx_l = max(0, min(88, idx_l + index_table[nibL]))
+
+            # Encode Right Channel (4-bit nibble)
+            stepR = step_table[idx_r]
+            diffR = sR - pred_r
+            nibR = 8 if diffR < 0 else 0
+            if diffR < 0: diffR = -diffR
+            deltaR = stepR >> 3
+            if diffR >= stepR:
+                nibR |= 4; diffR -= stepR; deltaR += stepR
+            if diffR >= (stepR >> 1):
+                nibR |= 2; diffR -= (stepR >> 1); deltaR += (stepR >> 1)
+            if diffR >= (stepR >> 2):
+                nibR |= 1; deltaR += (stepR >> 2)
+            pred_r = max(-32768, min(32767, (pred_r - deltaR) if (nibR & 8) else (pred_r + deltaR)))
+            idx_r = max(0, min(88, idx_r + index_table[nibR]))
+
+            out[i] = (nibL << 4) | nibR
+
+        self.pred_l, self.idx_l = pred_l, idx_l
+        self.pred_r, self.idx_r = pred_r, idx_r
+        return bytes(out)
 
 
 # ==============================================================================
@@ -288,8 +505,10 @@ class DirectAudioStreamer:
             sock.settimeout(3.0)
             sock.connect((self.target_ip, self.port))
             sock.settimeout(None)
-            sock.sendall(b"STREAM_PCM_48000_16BIT\r\n\r\n")
-            self.log(f"[SPEAKER ACTIVE] ✓ Lip-Sync sound streaming active to Phone ({self.target_ip})!", "green")
+
+            codec = ImaAdpcmCodec()
+            sock.sendall(b"STREAM_AUDIO_ADPCM\r\n\r\n")
+            self.log(f"[SPEAKER ACTIVE] ✓ Lip-Sync sound streaming active to Phone ({self.target_ip}) • Turbo ADPCM 384kbps (4x Bandwidth Compression, Zero Crackle)!", "green")
 
             speaker = sc.default_speaker()
             mic = sc.get_microphone(id=str(speaker.name), include_loopback=True)
@@ -299,7 +518,10 @@ class DirectAudioStreamer:
                     peak = np.max(np.abs(data)) if len(data) > 0 else 0.0
                     self.current_volume = float(min(1.0, peak * 1.5))
                     pcm16 = (data * 32767.0).clip(-32768, 32767).astype(np.int16).tobytes()
-                    sock.sendall(pcm16)
+                    adpcm = codec.encode_stereo(pcm16)
+                    # Framed Packet: 2 bytes magic (0xAA55) + 1 byte codec (0x02=ADPCM) + 2 bytes len + payload
+                    packet = struct.pack("!BBBH", 0xAA, 0x55, 0x02, len(adpcm)) + adpcm
+                    sock.sendall(packet)
             sock.close()
         except Exception as e:
             if self.running:
@@ -437,25 +659,60 @@ class HbspFileReceiverServer:
                     expected_size = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
                     clean_name = os.path.basename(raw_name)
                     target_path = os.path.join(DOWNLOADS_DIR, clean_name)
+                    part_path = target_path + ".part"
+
                     with self.lock:
                         if clean_name not in self.sessions:
-                            f = open(target_path, "wb")
-                            if expected_size > 0:
-                                try:
-                                    f.truncate(expected_size)
-                                except Exception:
-                                    pass
+                            resume_offset = 0
+                            if os.path.exists(part_path) and expected_size > 0:
+                                cur_len = os.path.getsize(part_path)
+                                if 0 < cur_len < expected_size:
+                                    resume_offset = (cur_len // CHUNK_SIZE) * CHUNK_SIZE
+
+                            mode = "r+b" if (resume_offset > 0 and os.path.exists(part_path)) else "w+b"
+                            f = open(part_path, mode)
+                            if resume_offset == 0:
+                                f.truncate(0)
+                                if expected_size > 0:
+                                    try:
+                                        f.truncate(expected_size)
+                                    except Exception:
+                                        pass
+                            else:
+                                if expected_size > 0 and os.path.getsize(part_path) < expected_size:
+                                    try:
+                                        f.truncate(expected_size)
+                                    except Exception:
+                                        pass
+                                f.seek(resume_offset)
+
                             self.sessions[clean_name] = {
                                 "file": f,
                                 "path": target_path,
+                                "part_path": part_path,
                                 "size": expected_size,
-                                "written": 0,
+                                "written": resume_offset,
+                                "resume_offset": resume_offset,
                                 "lock": threading.Lock(),
                                 "start_time": time.time(),
                                 "last_ui_update": 0
                             }
-                            self.log(f"[FILE BOUND] Target set to '{clean_name}' ({expected_size / (1024*1024):.2f} MB)", "cyan")
+                            if resume_offset > 0:
+                                self.log(f"[RESUME ACTIVE] ↺ Resuming '{clean_name}' from {resume_offset / (1024*1024):.1f} MB (Skipping already written chunks)", "cyan")
+                            else:
+                                self.log(f"[FILE BOUND] Target set to '{clean_name}' ({expected_size / (1024*1024):.2f} MB)", "cyan")
                         current_session = self.sessions[clean_name]
+                        res_off = current_session.get("resume_offset", 0)
+
+                    # Send RESUME_ACK back to sender on this socket
+                    ack_payload = f"RESUME_ACK|{res_off}".encode("utf-8")
+                    ack_checksum = zlib.adler32(ack_payload) & 0xFFFFFFFF
+                    ack_header = struct.pack("!4sBBHIIII", HBSP_MAGIC, HBSP_VERSION, FLAG_META | FLAG_RESUME, 0, 0, len(ack_payload), len(ack_payload), ack_checksum)
+                    try:
+                        client.sendall(ack_header)
+                        client.sendall(ack_payload)
+                    except Exception as e:
+                        self.log(f"[RESUME ACK NOTICE] {e}", "yellow")
 
                 if (flags & FLAG_FILE) and not is_meta and current_session:
                     offset = seq * CHUNK_SIZE
@@ -489,11 +746,20 @@ class HbspFileReceiverServer:
                                 except Exception:
                                     pass
                                 path = current_session["path"]
+                                part_path = current_session["part_path"]
                                 name = os.path.basename(path)
                                 total = current_session["written"]
                                 session_start = current_session.get("start_time", start_time)
                                 if name in self.sessions:
                                     del self.sessions[name]
+
+                                # Atomically rename .part file to final destination
+                                if os.path.exists(part_path):
+                                    try:
+                                        os.replace(part_path, path)
+                                    except Exception as err:
+                                        self.log(f"[RENAME NOTICE] {err}", "yellow")
+
                                 elapsed = max(0.001, time.time() - session_start)
                                 mbps = (total / (1024 * 1024)) / elapsed
                                 gbps = (mbps * 8) / 1000
@@ -601,11 +867,44 @@ class TurboFileSender:
             meta_header = struct.pack("!4sBBHIIII", HBSP_MAGIC, HBSP_VERSION, FLAG_FILE | FLAG_META, 0, 0, len(meta_payload), len(meta_payload), checksum)
 
             for s, _, _, _ in sockets:
-                s.sendall(meta_header)
-                s.sendall(meta_payload)
+                try:
+                    s.sendall(meta_header)
+                    s.sendall(meta_payload)
+                except Exception:
+                    pass
+
+            # Read RESUME_ACK from primary socket with short timeout
+            resume_offset = 0
+            if sockets:
+                primary_sock = sockets[0][0]
+                try:
+                    primary_sock.settimeout(2.0)
+                    ack_head = self._read_exact(primary_sock, 24)
+                    if ack_head:
+                        m, v, fl, _, seq, p_len, d_len, _ = struct.unpack("!4sBBHIIII", ack_head)
+                        if m == HBSP_MAGIC and (fl & FLAG_RESUME):
+                            ack_body = self._read_exact(primary_sock, p_len)
+                            if ack_body:
+                                ack_str = ack_body.decode("utf-8", errors="ignore").strip()
+                                if ack_str.startswith("RESUME_ACK|"):
+                                    parsed_off = int(ack_str.split("|")[1])
+                                    if 0 < parsed_off < file_size:
+                                        resume_offset = (parsed_off // CHUNK_SIZE) * CHUNK_SIZE
+                    primary_sock.settimeout(None)
+                except Exception:
+                    try:
+                        primary_sock.settimeout(None)
+                    except Exception:
+                        pass
+
+            if resume_offset > 0:
+                pct = int(resume_offset * 100 / file_size)
+                self.log(f"[RESUME ACTIVE] ↺ Resuming '{file_name}' from {resume_offset / (1024*1024):.1f} MB ({pct}% saved, skipping sent chunks)!", "green")
+            else:
+                self.log(f"[TRANSFER START] 🚀 Sending '{file_name}' ({file_size / (1024*1024):.1f} MB)", "cyan")
 
             start_time = time.time()
-            total_sent_wire = (len(meta_header) + len(meta_payload)) * len(sockets)
+            total_sent_wire = resume_offset
             stat_lock = threading.Lock()
             last_telemetry_time = time.time()
             last_telemetry_bytes = {ip: 0 for ip in clean_ips}
@@ -631,6 +930,11 @@ class TurboFileSender:
                     except Exception:
                         with stat_lock:
                             active_workers = max(0, active_workers - 1)
+                        # Re-enqueue chunk for surviving workers if available
+                        try:
+                            chunk_queue.put(item)
+                        except Exception:
+                            pass
                         chunk_queue.task_done()
                         break
                     else:
@@ -643,12 +947,14 @@ class TurboFileSender:
                 threads.append(t)
 
             if self.progress:
-                self.progress(0, file_size, 0.0, 0.0, len(sockets), {}, file_name=file_name)
+                self.progress(resume_offset, file_size, 0.0, 0.0, len(sockets), {}, file_name=file_name)
 
-            chunk_idx = 0
-            bytes_read = 0
+            chunk_idx = resume_offset // CHUNK_SIZE
+            bytes_read = resume_offset
 
             with open(file_path, "rb", buffering=2 * 1024 * 1024) as f:
+                if resume_offset > 0:
+                    f.seek(resume_offset)
                 while bytes_read < file_size and not self.cancelled:
                     if active_workers <= 0:
                         break
@@ -725,6 +1031,18 @@ class TurboFileSender:
             self.log(f"[TURBO ERROR] Transfer error: {e}", "red")
             if self.on_complete:
                 self.on_complete(file_name, file_size, 0.0, "FAILED", file_path)
+
+    def _read_exact(self, sock, num_bytes):
+        buf = bytearray()
+        while len(buf) < num_bytes:
+            try:
+                chunk = sock.recv(num_bytes - len(buf))
+                if not chunk:
+                    return None
+                buf.extend(chunk)
+            except Exception:
+                return None
+        return bytes(buf)
 
 
 # ==============================================================================
@@ -1019,10 +1337,10 @@ class SoundWaveSpikeVisualizer(tk.Canvas):
 
         # 4. Status HUD Overlay
         if self.is_active:
-            status_txt = f"● LIVE AUDIO OSCILLOSCOPE • PEAK: {int(self.volume * 100)}% • 48 kHz STEREO PCM (10ms Lip-Sync)"
+            status_txt = f"● LIVE AUDIO OSCILLOSCOPE • PEAK: {int(self.volume * 100)}% • 48 kHz STEREO (Turbo ADPCM 384kbps • Zero Crackle)"
             status_fg = COLOR_SUCCESS
         else:
-            status_txt = "○ STANDBY • READY TO TRANSMIT AUDIO TO/FROM PHONE"
+            status_txt = "○ STANDBY • READY TO TRANSMIT PC AUDIO TO PHONE SPEAKER"
             status_fg = COLOR_TEXT_MUTED
 
         self.create_text(20, 14, text=status_txt, anchor="nw", font=("Consolas", 8, "bold"), fill=status_fg)
@@ -1046,6 +1364,7 @@ class P2PwireDesktopApp:
         self.file_sender = None
         self.current_tab = "sound"  # Default: Sound Transmission is First!
         self.history_items = []
+        self.nat_info = detect_cgnat()
 
         self._load_history()
         self._init_styles()
@@ -1053,7 +1372,7 @@ class P2PwireDesktopApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         # Discovery & Servers
-        self.discovery = PeerAutoDiscovery(self.local_ips, self._on_peers_updated)
+        self.discovery = PeerAutoDiscovery(self.local_ips, self._on_peers_updated, self._on_ap_isolation_detected)
         self.discovery.start()
 
         self.file_server = HbspFileReceiverServer(
@@ -1073,6 +1392,7 @@ class P2PwireDesktopApp:
 
         self.log("[INIT] P2Pwire Desktop Studio 3.0 Ready (Audio: Port 8080 | Files: Port 8082).", "cyan")
         self.log(f"[NETWORK INTERFACES] {', '.join(self.local_ips)}", "white")
+        self.log(f"[STUN NAT WAN] {self.nat_info.get('msg')}", "yellow" if self.nat_info.get("is_cgnat") else "green")
 
     def _init_styles(self):
         style = ttk.Style()
@@ -1434,6 +1754,22 @@ class P2PwireDesktopApp:
         )
         self.diag_ports_label.pack(fill=tk.X, pady=2)
 
+        # STUN NAT & CGNAT Status Line
+        cgnat_color = COLOR_WARNING if self.nat_info.get("is_cgnat") else COLOR_ACCENT
+        self.diag_nat_label = tk.Label(
+            diag_grid,
+            text=f"STUN NAT WAN: {self.nat_info.get('msg', 'Detecting...')}",
+            font=("Consolas", 8, "bold"), fg=cgnat_color, bg=COLOR_SURFACE, anchor="w"
+        )
+        self.diag_nat_label.pack(fill=tk.X, pady=2)
+
+        self.diag_ap_isolation_label = tk.Label(
+            diag_grid,
+            text="AP Isolation: Monitoring (Subnet Unicast Sweeper Active)",
+            font=("Consolas", 8), fg=COLOR_TEXT_MUTED, bg=COLOR_SURFACE, anchor="w"
+        )
+        self.diag_ap_isolation_label.pack(fill=tk.X, pady=2)
+
         # Terminal Console
         console_frame = tk.LabelFrame(
             self.frame_diag, text=" 📋 Real-Time Diagnostic Stream ",
@@ -1604,6 +1940,32 @@ class P2PwireDesktopApp:
             self.diag_interfaces_label.config(text=f"Local PC Interfaces: {', '.join(self.local_ips)}")
         threading.Thread(target=self.discovery._broadcast_pc_beacon, daemon=True).start()
         threading.Thread(target=self.discovery._active_multirail_scanner, daemon=True).start()
+
+    def _on_ap_isolation_detected(self, is_detected):
+        def _ui():
+            if is_detected and not self.phone_ips:
+                self.badge.config(text="⚠️ AP ISOLATION ACTIVE", fg=COLOR_DANGER, bg="#331A24")
+                self.status_subtext.config(
+                    text="Router isolates Wi-Fi devices! Turn ON Phone Hotspot or use USB Tethering for direct 800 Mbps link.",
+                    fg=COLOR_DANGER
+                )
+                if hasattr(self, 'diag_ap_isolation_label'):
+                    self.diag_ap_isolation_label.config(
+                        text="AP Isolation: ⚠️ DETECTED (Router blocking Wi-Fi broadcast/unicast)",
+                        fg=COLOR_DANGER
+                    )
+            elif not is_detected and not self.phone_ips:
+                self.badge.config(text="SEARCHING MESH", fg=COLOR_ACCENT, bg=COLOR_SURFACE_ALT)
+                self.status_subtext.config(
+                    text="Scanning network for Phone (Wi-Fi + USB Tethering)...",
+                    fg=COLOR_TEXT_MUTED
+                )
+                if hasattr(self, 'diag_ap_isolation_label'):
+                    self.diag_ap_isolation_label.config(
+                        text="AP Isolation: Clear • Subnet sweep active",
+                        fg=COLOR_SUCCESS
+                    )
+        self.root.after(0, _ui)
 
     def _on_peers_updated(self, ips):
         self.phone_ips = ips
